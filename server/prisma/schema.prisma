@@ -1,0 +1,118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Player {
+  id         String   @id @default(cuid())
+  name       String
+  skillLevel Float    @default(3.0)
+  email      String?
+  phone      String?
+  avatarUrl  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  team1Entries Team[] @relation("Player1")
+  team2Entries Team[] @relation("Player2")
+  eventPlayers EventPlayer[]
+}
+
+model Team {
+  id        String  @id @default(cuid())
+  player1Id String
+  player2Id String?
+  name      String?
+
+  player1 Player  @relation("Player1", fields: [player1Id], references: [id], onDelete: Cascade)
+  player2 Player? @relation("Player2", fields: [player2Id], references: [id], onDelete: Cascade)
+
+  matchesAsTeam1 Match[]    @relation("Team1")
+  matchesAsTeam2 Match[]    @relation("Team2")
+  standings      Standing[]
+}
+
+model Event {
+  id       String      @id @default(cuid())
+  name     String
+  date     DateTime    @default(now())
+  location String?
+  type     String      // 'round_robin' | 'tournament'
+  format   String      // 'singles' | 'doubles'
+  status   String      @default("setup") // setup | in_progress | completed
+  config   String?     // JSON config for event-specific settings
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  courts     Court[]
+  matches    Match[]
+  standings  Standing[]
+  eventPlayers EventPlayer[]
+}
+
+model EventPlayer {
+  id       String @id @default(cuid())
+  eventId  String
+  playerId String
+  seed     Int?
+
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, playerId])
+}
+
+model Court {
+  id       String  @id @default(cuid())
+  name     String
+  eventId  String?
+  isActive Boolean @default(true)
+
+  event   Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  matches Match[]
+}
+
+model Match {
+  id            String    @id @default(cuid())
+  eventId       String
+  courtId       String?
+  team1Id       String?
+  team2Id       String?
+  team1Score    Int       @default(0)
+  team2Score    Int       @default(0)
+  status        String    @default("scheduled") // scheduled | in_progress | completed
+  round         Int       @default(1)
+  bracket       String?   // 'winners' | 'losers' | null for round robin
+  bracketPosition Int?
+  scheduledTime DateTime?
+  completedAt   DateTime?
+  bestOf        Int       @default(1)
+  gameScores    String?   // JSON array of game scores for best-of series
+  createdAt     DateTime  @default(now())
+
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  court  Court? @relation(fields: [courtId], references: [id], onDelete: SetNull)
+  team1  Team?  @relation("Team1", fields: [team1Id], references: [id], onDelete: SetNull)
+  team2  Team?  @relation("Team2", fields: [team2Id], references: [id], onDelete: SetNull)
+}
+
+model Standing {
+  id             String @id @default(cuid())
+  eventId        String
+  teamId         String
+  playerId       String? // for singles round robin
+  wins           Int    @default(0)
+  losses         Int    @default(0)
+  pointsFor      Int    @default(0)
+  pointsAgainst  Int    @default(0)
+  sitOuts        Int    @default(0)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, teamId])
+}
