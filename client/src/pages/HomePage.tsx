@@ -13,21 +13,21 @@ const quickActions = [
     icon: RotateCcw,
     title: 'Start Round Robin',
     description: 'Casual group play with auto-rotation',
-    color: 'text-green-600 bg-green-100 dark:bg-green-950',
+    color: 'text-emerald-700 bg-emerald-50 ring-emerald-100 dark:text-emerald-300 dark:bg-emerald-950/60 dark:ring-emerald-900',
   },
   {
     to: '/tournament',
     icon: Trophy,
     title: 'New Tournament',
     description: 'Bracket-style competitive play',
-    color: 'text-yellow-600 bg-yellow-100 dark:bg-yellow-950',
+    color: 'text-amber-700 bg-amber-50 ring-amber-100 dark:text-amber-300 dark:bg-amber-950/60 dark:ring-amber-900',
   },
   {
     to: '/players',
     icon: Users,
     title: 'Manage Players',
     description: 'Add, edit, and view player stats',
-    color: 'text-blue-600 bg-blue-100 dark:bg-blue-950',
+    color: 'text-sky-700 bg-sky-50 ring-sky-100 dark:text-sky-300 dark:bg-sky-950/60 dark:ring-sky-900',
   },
 ];
 
@@ -41,16 +41,16 @@ export function HomePage() {
   return (
     <div className="space-y-8 md:ml-56">
       <div>
-        <h1 className="text-3xl font-bold">Pickleball Tournament Manager</h1>
-        <p className="text-muted-foreground mt-1">Manage events, track scores, and run tournaments courtside.</p>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">Pickleball Manager</h1>
+        <p className="text-muted-foreground mt-2 max-w-2xl">Manage events, track scores, and run tournaments courtside.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {quickActions.map(({ to, icon: Icon, title, description, color }) => (
           <Link key={to} to={to}>
-            <Card className="hover:shadow-lg transition-all hover:-translate-y-0.5 cursor-pointer h-full">
+            <Card className="hover:shadow-lg hover:shadow-slate-950/10 transition-all hover:-translate-y-0.5 cursor-pointer h-full">
               <CardHeader>
-                <div className={`inline-flex p-3 rounded-xl ${color} mb-2`}>
+                <div className={`inline-flex w-fit p-3 rounded-lg ring-1 ${color} mb-2`}>
                   <Icon className="h-6 w-6" />
                 </div>
                 <CardTitle>{title}</CardTitle>
@@ -64,7 +64,7 @@ export function HomePage() {
       {recentEvents.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold">Recent Events</h2>
+            <h2 className="text-xl font-semibold tracking-tight">Recent Events</h2>
             <Button variant="ghost" size="sm" asChild>
               <Link to="/history"><History className="h-4 w-4" /> View All</Link>
             </Button>
@@ -75,7 +75,7 @@ export function HomePage() {
                 key={event.id}
                 to={event.type === 'round_robin' ? `/round-robin/${event.id}` : `/tournament/${event.id}`}
               >
-                <Card className="hover:shadow-md transition-shadow">
+                <Card className="hover:shadow-md hover:shadow-slate-950/10 transition-shadow">
                   <CardContent className="flex items-center justify-between py-4">
                     <div>
                       <p className="font-medium">{event.name}</p>

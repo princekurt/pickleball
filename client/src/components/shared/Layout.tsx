@@ -18,35 +18,35 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { darkMode, toggleDarkMode } = useThemeStore();
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 no-print">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4 gap-2">
-          <Link to="/" className="flex items-center gap-2 font-bold text-lg shrink-0">
-            <span className="text-2xl">🏓</span>
+    <div className="min-h-screen flex flex-col bg-background">
+      <header className="sticky top-0 z-40 border-b bg-card/90 shadow-sm shadow-slate-950/5 backdrop-blur supports-[backdrop-filter]:bg-card/75 no-print">
+        <div className="container mx-auto flex h-16 items-center justify-between px-4 gap-3">
+          <Link to="/" className="flex items-center gap-2.5 font-bold text-lg shrink-0 tracking-tight">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-xl text-primary">🏓</span>
             <span className="hidden sm:inline">Pickleball Manager</span>
           </Link>
-          <div className="flex items-center gap-1 shrink-0">
-          <InstallAppButton />
-          <Button variant="ghost" size="icon" onClick={toggleDarkMode} aria-label="Toggle dark mode">
-            {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <InstallAppButton />
+            <Button variant="ghost" size="icon" onClick={toggleDarkMode} aria-label="Toggle dark mode">
+              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </Button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 container mx-auto px-4 py-6 pb-24 md:pb-6">{children}</main>
+      <main className="flex-1 container mx-auto px-4 py-8 pb-24 md:pb-8">{children}</main>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background md:hidden no-print">
-        <div className="flex justify-around py-2">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-card/95 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur md:hidden no-print">
+        <div className="flex justify-around px-2 py-2">
           {navItems.map(({ to, icon: Icon, label }) => (
             <Link
               key={to}
               to={to}
               className={cn(
-                'flex flex-col items-center gap-0.5 px-3 py-1 text-xs transition-colors',
+                'flex min-w-14 flex-col items-center gap-0.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
                 location.pathname === to || (to !== '/' && location.pathname.startsWith(to))
-                  ? 'text-primary'
-                  : 'text-muted-foreground'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
               )}
             >
               <Icon className="h-5 w-5" />
@@ -56,14 +56,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </nav>
 
-      <aside className="hidden md:block fixed left-0 top-14 bottom-0 w-56 border-r bg-background p-4 no-print">
-        <nav className="space-y-1">
+      <aside className="hidden md:block fixed left-0 top-16 bottom-0 w-56 border-r bg-card/70 p-4 no-print">
+        <nav className="space-y-1.5">
           {navItems.map(({ to, icon: Icon, label }) => (
             <Link
               key={to}
               to={to}
               className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors hover:bg-accent',
+                'flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground',
                 location.pathname === to || (to !== '/' && location.pathname.startsWith(to))
                   ? 'bg-accent text-accent-foreground font-medium'
                   : 'text-muted-foreground'
