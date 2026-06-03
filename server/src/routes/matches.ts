@@ -69,11 +69,13 @@ matchesRouter.post('/:id/score', async (req, res) => {
       },
     });
 
-    if (confirm && match.event.type === 'round_robin') {
+    if (confirm && match.status !== 'completed' && match.event.type === 'round_robin') {
       await updateRoundRobinStandings(match.eventId, updated);
+      await fillOpenRoundRobinCourts(match.eventId);
+      await completeRoundRobinIfFinished(match.eventId);
     }
 
-    if (confirm && match.event.type === 'tournament') {
+    if (confirm && match.status !== 'completed' && match.event.type === 'tournament') {
       await advanceTournamentWinner(updated);
     }
 
@@ -83,6 +85,71 @@ matchesRouter.post('/:id/score', async (req, res) => {
     res.status(500).json({ error: 'Failed to submit score' });
   }
 });
+
+async function fillOpenRoundRobinCourts(eventId: string) {
+  const courts = await prisma.court.findMany({
+    where: { eventId },
+    orderBy: { name: 'asc' },
+  });
+  const queuedMatches = await prisma.match.findMany({
+    where: { eventId, status: 'scheduled', courtId: null },
+    orderBy: [{ bracketPosition: 'asc' }],
+    include: {
+      team1: true,
+      team2: true,
+    },
+  });
+  const activeMatches = await prisma.match.findMany({
+    where: { eventId, status: { in: ['scheduled', 'in_progress'] }, courtId: { not: null } },
+    include: {
+      team1: true,
+      team2: true,
+    },
+  });
+  const openCourts = courts.filter((court) => !activeMatches.some((match) => match.courtId === court.id));
+
+  for (const court of openCourts) {
+    const activePlayerIds = new Set(activeMatches.flatMap(getMatchPlayerIds));
+    const nextIndex = queuedMatches.findIndex((candidate) =>
+      getMatchPlayerIds(candidate).every((playerId) => !activePlayerIds.has(playerId))
+    );
+
+    if (nextIndex === -1) return;
+
+    const [nextMatch] = queuedMatches.splice(nextIndex, 1);
+    const assigned = await prisma.match.update({
+      where: { id: nextMatch.id },
+      data: { courtId: court.id },
+      include: {
+        team1: true,
+        team2: true,
+      },
+    });
+    activeMatches.push(assigned);
+  }
+}
+
+function getMatchPlayerIds(match: {
+  team1: { player1Id: string; player2Id: string | null } | null;
+  team2: { player1Id: string; player2Id: string | null } | null;
+}) {
+  return [match.team1?.player1Id, match.team1?.player2Id, match.team2?.player1Id, match.team2?.player2Id].filter(
+    Boolean
+  ) as string[];
+}
+
+async function completeRoundRobinIfFinished(eventId: string) {
+  const remaining = await prisma.match.count({
+    where: { eventId, status: { not: 'completed' } },
+  });
+
+  if (remaining === 0) {
+    await prisma.event.update({
+      where: { id: eventId },
+      data: { status: 'completed' },
+    });
+  }
+}
 
 async function updateRoundRobinStandings(
   eventId: string,

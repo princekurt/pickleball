@@ -71,27 +71,12 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
     }
   };
 
-  const nextRound = async () => {
-    try {
-      const result = await api.roundRobin.nextRound(eventId);
-      if ('status' in result && result.status === 'completed') {
-        toast({ title: 'Round Robin complete!' });
-      } else {
-        toast({ title: `Round ${config.currentRound + 1} started` });
-      }
-      fetchEvent();
-    } catch (err) {
-      toast({ title: 'Error', description: err instanceof Error ? err.message : 'Failed', variant: 'destructive' });
-    }
-  };
-
   if (loading) return <div className="text-center py-12">Loading...</div>;
   if (!event) return <div className="text-center py-12">Event not found</div>;
 
-  const currentRound = config.currentRound || 1;
-  const currentMatches = event.matches.filter((m) => m.round === currentRound);
-  const allCurrentComplete = currentMatches.every((m) => m.status === 'completed');
-  const sittingOut = getSittingOutPlayers(event, currentMatches);
+  const activeMatches = event.matches.filter((m) => m.status !== 'completed' && m.courtId);
+  const currentRound = activeMatches.length > 0 ? Math.min(...activeMatches.map((m) => m.round)) : config.currentRound || 1;
+  const sittingOut = getSittingOutPlayers(event, activeMatches);
 
   return (
     <div className="space-y-6">
@@ -107,14 +92,11 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
           <Button variant="outline" size="sm" onClick={() => api.events.exportCsv(eventId)}>
             <Download className="h-4 w-4" /> Export
           </Button>
-          {allCurrentComplete && event.status === 'in_progress' && (
-            <Button onClick={nextRound}>Next Round</Button>
-          )}
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        {currentMatches.map((match) => (
+        {activeMatches.map((match) => (
           <CourtCard
             key={match.id}
             match={match}
@@ -126,7 +108,7 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
         ))}
       </div>
 
-      {sittingOut.length > 0 && (
+      {event.status === 'in_progress' && sittingOut.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Sitting Out</CardTitle>
@@ -140,6 +122,8 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
           </CardContent>
         </Card>
       )}
+
+      <FullSchedule matches={event.matches} />
 
       <StandingsTable standings={event.standings} />
     </div>
@@ -272,6 +256,38 @@ function StandingsTable({ standings }: { standings: EventDetail['standings'] }) 
             ))}
           </tbody>
         </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FullSchedule({ matches }: { matches: MatchDetail[] }) {
+  const sorted = [...matches].sort((a, b) => {
+    if (a.round !== b.round) return a.round - b.round;
+    return (a.bracketPosition ?? 0) - (b.bracketPosition ?? 0);
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Full Schedule</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {sorted.map((match) => (
+          <div key={match.id} className="flex flex-col gap-1 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <span className="font-medium">Round {match.round}</span>
+              <span className="mx-2 text-muted-foreground">-</span>
+              <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
+              <span className="mx-2 text-muted-foreground">vs</span>
+              <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{match.court?.name || 'Queued'}</span>
+              <StatusBadge status={match.status} />
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

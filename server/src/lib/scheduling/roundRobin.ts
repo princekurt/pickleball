@@ -21,6 +21,8 @@ export interface RoundSchedule {
   sittingOut: string[];
 }
 
+type CircleSlot<T> = T | null;
+
 /** Balance players into doubles teams by skill rating */
 export function balanceTeams(players: PlayerInfo[]): TeamPair[] {
   const sorted = [...players].sort((a, b) => b.skillLevel - a.skillLevel);
@@ -51,88 +53,16 @@ export function generateDoublesRoundRobin(
   skillBalanced: boolean,
   sitOutCounts: Record<string, number> = {}
 ): RoundSchedule[] {
-  const n = players.length;
-  const rounds: RoundSchedule[] = [];
-
-  // Circle method for round robin pairing
-  const playerIds = players.map((p) => p.id);
-  const totalRounds = n - 1 + (n % 2);
-
-  for (let r = 0; r < Math.min(totalRounds, n); r++) {
-    const rotated = rotateArray(playerIds, r);
-    const pairs: [string, string][] = [];
-
-    for (let i = 0; i < Math.floor(rotated.length / 2); i++) {
-      pairs.push([rotated[i], rotated[rotated.length - 1 - i]]);
-    }
-
-    // Form doubles teams from pairs
-    const teams: TeamPair[] = [];
-    if (skillBalanced) {
-      const roundPlayers = pairs.flatMap(([a, b]) => [
-        players.find((p) => p.id === a)!,
-        players.find((p) => p.id === b)!,
-      ]);
-      teams.push(...balanceTeams(roundPlayers));
-    } else {
-      for (let i = 0; i < pairs.length; i += 2) {
-        if (i + 1 < pairs.length) {
-          teams.push({
-            player1Id: pairs[i][0],
-            player2Id: pairs[i][1],
-          });
-          teams.push({
-            player1Id: pairs[i + 1][0],
-            player2Id: pairs[i + 1][1],
-          });
-        } else {
-          teams.push({ player1Id: pairs[i][0], player2Id: pairs[i][1] });
+  const teams = skillBalanced
+    ? balanceTeams(players)
+    : players.reduce<TeamPair[]>((acc, player, index) => {
+        if (index % 2 === 0) {
+          acc.push({ player1Id: player.id, player2Id: players[index + 1]?.id });
         }
-      }
-    }
+        return acc;
+      }, []);
 
-    const maxMatches = numCourts;
-    const maxPlayersOnCourt = maxMatches * 4;
-    const playingIds = new Set<string>();
-    const courts: CourtAssignment[] = [];
-    let teamIdx = 0;
-
-    while (teamIdx + 1 < teams.length && courts.length < maxMatches) {
-      courts.push({
-        courtIndex: courts.length,
-        team1: teams[teamIdx],
-        team2: teams[teamIdx + 1],
-      });
-      [teams[teamIdx], teams[teamIdx + 1]].forEach((t) => {
-        playingIds.add(t.player1Id);
-        if (t.player2Id) playingIds.add(t.player2Id);
-      });
-      teamIdx += 2;
-    }
-
-    const allIds = new Set(playerIds);
-    let sittingOut = [...allIds].filter((id) => !playingIds.has(id));
-
-    // Prioritize players who have sat out the most
-    sittingOut.sort((a, b) => (sitOutCounts[b] || 0) - (sitOutCounts[a] || 0));
-
-    // If too many players, rotate extras in
-    if (playingIds.size > maxPlayersOnCourt) {
-      // handled by court limit above
-    }
-
-    rounds.push({
-      round: r + 1,
-      courts,
-      sittingOut,
-    });
-
-    sittingOut.forEach((id) => {
-      sitOutCounts[id] = (sitOutCounts[id] || 0) + 1;
-    });
-  }
-
-  return rounds;
+  return generateFixedDoublesRoundRobin(teams, numCourts, sitOutCounts);
 }
 
 /** Generate round robin schedule for fixed doubles teams */
@@ -141,49 +71,9 @@ export function generateFixedDoublesRoundRobin(
   numCourts: number,
   sitOutCounts: Record<string, number> = {}
 ): RoundSchedule[] {
-  const teamCount = teams.length;
-  const rounds: RoundSchedule[] = [];
-  const teamIndexes = teams.map((_, index) => index);
-  const totalRounds = teamCount % 2 === 0 ? teamCount - 1 : teamCount;
-
-  for (let r = 0; r < totalRounds; r++) {
-    const rotated = rotateArray(teamIndexes, r);
-    const playingIds = new Set<string>();
-    const courts: CourtAssignment[] = [];
-
-    for (let i = 0; i < Math.floor(rotated.length / 2) && courts.length < numCourts; i++) {
-      const team1 = teams[rotated[i]];
-      const team2 = teams[rotated[rotated.length - 1 - i]];
-      if (!team1 || !team2) continue;
-
-      courts.push({
-        courtIndex: courts.length,
-        team1,
-        team2,
-      });
-
-      [team1, team2].forEach((team) => {
-        playingIds.add(team.player1Id);
-        if (team.player2Id) playingIds.add(team.player2Id);
-      });
-    }
-
-    const allIds = teams.flatMap((team) => [team.player1Id, team.player2Id].filter(Boolean) as string[]);
-    const sittingOut = allIds.filter((id) => !playingIds.has(id));
-    sittingOut.sort((a, b) => (sitOutCounts[b] || 0) - (sitOutCounts[a] || 0));
-
-    rounds.push({
-      round: r + 1,
-      courts,
-      sittingOut,
-    });
-
-    sittingOut.forEach((id) => {
-      sitOutCounts[id] = (sitOutCounts[id] || 0) + 1;
-    });
-  }
-
-  return rounds;
+  return buildCircleSchedule(teams, numCourts, sitOutCounts, (team) =>
+    [team.player1Id, team.player2Id].filter(Boolean) as string[]
+  );
 }
 
 /** Generate round robin for singles */
@@ -192,53 +82,56 @@ export function generateSinglesRoundRobin(
   numCourts: number,
   sitOutCounts: Record<string, number> = {}
 ): RoundSchedule[] {
-  const n = players.length;
-  const playerIds = players.map((p) => p.id);
+  const singlesTeams = players.map((player) => ({ player1Id: player.id }));
+  return buildCircleSchedule(singlesTeams, numCourts, sitOutCounts, (team) => [team.player1Id]);
+}
+
+function buildCircleSchedule(
+  teams: TeamPair[],
+  numCourts: number,
+  sitOutCounts: Record<string, number>,
+  getParticipantIds: (team: TeamPair) => string[]
+): RoundSchedule[] {
   const rounds: RoundSchedule[] = [];
-  const totalRounds = n % 2 === 0 ? n - 1 : n;
+  if (teams.length < 2) return rounds;
 
-  for (let r = 0; r < totalRounds; r++) {
-    const rotated = rotateArray(playerIds, r);
-    const pairs: [string, string][] = [];
+  const slots: CircleSlot<TeamPair>[] = teams.length % 2 === 0 ? [...teams] : [...teams, null];
+  const totalRounds = slots.length - 1;
+  const allIds = teams.flatMap(getParticipantIds);
 
-    for (let i = 0; i < Math.floor(rotated.length / 2); i++) {
-      pairs.push([rotated[i], rotated[rotated.length - 1 - i]]);
-    }
-
+  for (let roundIndex = 0; roundIndex < totalRounds; roundIndex++) {
     const playingIds = new Set<string>();
     const courts: CourtAssignment[] = [];
 
-    for (let i = 0; i < Math.min(pairs.length, numCourts); i++) {
+    for (let i = 0; i < slots.length / 2; i++) {
+      const team1 = slots[i];
+      const team2 = slots[slots.length - 1 - i];
+      if (!team1 || !team2) continue;
+
       courts.push({
-        courtIndex: i,
-        team1: { player1Id: pairs[i][0] },
-        team2: { player1Id: pairs[i][1] },
+        courtIndex: courts.length % Math.max(1, numCourts),
+        team1,
+        team2,
       });
-      playingIds.add(pairs[i][0]);
-      playingIds.add(pairs[i][1]);
+
+      getParticipantIds(team1).forEach((id) => playingIds.add(id));
+      getParticipantIds(team2).forEach((id) => playingIds.add(id));
     }
 
-    let sittingOut = playerIds.filter((id) => !playingIds.has(id));
-    sittingOut.sort((a, b) => (sitOutCounts[b] || 0) - (sitOutCounts[a] || 0));
+    const sittingOut = allIds.filter((id) => !playingIds.has(id));
+    sittingOut.sort((a, b) => (sitOutCounts[a] || 0) - (sitOutCounts[b] || 0));
 
-    rounds.push({ round: r + 1, courts, sittingOut });
+    rounds.push({ round: roundIndex + 1, courts, sittingOut });
 
     sittingOut.forEach((id) => {
       sitOutCounts[id] = (sitOutCounts[id] || 0) + 1;
     });
+
+    const moved = slots.pop();
+    if (moved !== undefined) slots.splice(1, 0, moved);
   }
 
   return rounds;
-}
-
-function rotateArray<T>(arr: T[], shift: number): T[] {
-  const n = arr.length;
-  const result = [...arr];
-  for (let i = 0; i < shift; i++) {
-    const last = result.pop()!;
-    result.unshift(last);
-  }
-  return result;
 }
 
 export function getTeamDisplayName(
