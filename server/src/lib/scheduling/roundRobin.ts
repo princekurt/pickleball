@@ -135,6 +135,57 @@ export function generateDoublesRoundRobin(
   return rounds;
 }
 
+/** Generate round robin schedule for fixed doubles teams */
+export function generateFixedDoublesRoundRobin(
+  teams: TeamPair[],
+  numCourts: number,
+  sitOutCounts: Record<string, number> = {}
+): RoundSchedule[] {
+  const teamCount = teams.length;
+  const rounds: RoundSchedule[] = [];
+  const teamIndexes = teams.map((_, index) => index);
+  const totalRounds = teamCount % 2 === 0 ? teamCount - 1 : teamCount;
+
+  for (let r = 0; r < totalRounds; r++) {
+    const rotated = rotateArray(teamIndexes, r);
+    const playingIds = new Set<string>();
+    const courts: CourtAssignment[] = [];
+
+    for (let i = 0; i < Math.floor(rotated.length / 2) && courts.length < numCourts; i++) {
+      const team1 = teams[rotated[i]];
+      const team2 = teams[rotated[rotated.length - 1 - i]];
+      if (!team1 || !team2) continue;
+
+      courts.push({
+        courtIndex: courts.length,
+        team1,
+        team2,
+      });
+
+      [team1, team2].forEach((team) => {
+        playingIds.add(team.player1Id);
+        if (team.player2Id) playingIds.add(team.player2Id);
+      });
+    }
+
+    const allIds = teams.flatMap((team) => [team.player1Id, team.player2Id].filter(Boolean) as string[]);
+    const sittingOut = allIds.filter((id) => !playingIds.has(id));
+    sittingOut.sort((a, b) => (sitOutCounts[b] || 0) - (sitOutCounts[a] || 0));
+
+    rounds.push({
+      round: r + 1,
+      courts,
+      sittingOut,
+    });
+
+    sittingOut.forEach((id) => {
+      sitOutCounts[id] = (sitOutCounts[id] || 0) + 1;
+    });
+  }
+
+  return rounds;
+}
+
 /** Generate round robin for singles */
 export function generateSinglesRoundRobin(
   players: PlayerInfo[],

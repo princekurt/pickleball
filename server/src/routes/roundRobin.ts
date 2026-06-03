@@ -2,6 +2,7 @@ import { Router } from 'express';
 import prisma from '../lib/prisma.js';
 import {
   generateDoublesRoundRobin,
+  generateFixedDoublesRoundRobin,
   generateSinglesRoundRobin,
 } from '../lib/scheduling/roundRobin.js';
 
@@ -18,7 +19,13 @@ roundRobinRouter.post('/setup', async (req, res) => {
       scoringType,
       targetScore,
       gameDuration,
+      partnerPairs,
     } = req.body;
+
+    const manualTeams =
+      format === 'doubles' && Array.isArray(partnerPairs)
+        ? partnerPairs.map(([player1Id, player2Id]: [string, string]) => ({ player1Id, player2Id }))
+        : undefined;
 
     const players = await prisma.player.findMany({
       where: { id: { in: playerIds } },
@@ -42,6 +49,7 @@ roundRobinRouter.post('/setup', async (req, res) => {
           gameDuration,
           currentRound: 0,
           sitOutCounts: {},
+          partnerPairs: manualTeams,
         }),
       },
     });
@@ -68,7 +76,9 @@ roundRobinRouter.post('/setup', async (req, res) => {
     const config = JSON.parse(event.config || '{}');
     const schedule =
       format === 'doubles'
-        ? generateDoublesRoundRobin(players, numCourts, skillBalanced)
+        ? manualTeams
+          ? generateFixedDoublesRoundRobin(manualTeams, numCourts)
+          : generateDoublesRoundRobin(players, numCourts, skillBalanced)
         : generateSinglesRoundRobin(players, numCourts);
 
     // Create teams and first round matches
@@ -133,7 +143,9 @@ roundRobinRouter.post('/:eventId/next-round', async (req, res) => {
     const players = event.eventPlayers.map((ep) => ep.player);
     const schedule =
       event.format === 'doubles'
-        ? generateDoublesRoundRobin(players, event.courts.length, config.skillBalanced, config.sitOutCounts || {})
+        ? Array.isArray(config.partnerPairs)
+          ? generateFixedDoublesRoundRobin(config.partnerPairs, event.courts.length, config.sitOutCounts || {})
+          : generateDoublesRoundRobin(players, event.courts.length, config.skillBalanced, config.sitOutCounts || {})
         : generateSinglesRoundRobin(players, event.courts.length, config.sitOutCounts || {});
 
     if (nextRound > schedule.length) {

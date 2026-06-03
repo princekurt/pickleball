@@ -107,6 +107,7 @@ export interface EventDetail extends Event {
 export interface RoundRobinSetup {
   name?: string;
   playerIds: string[];
+  partnerPairs?: [string, string][];
   numCourts: number;
   format: 'singles' | 'doubles';
   skillBalanced?: boolean;
@@ -120,6 +121,7 @@ export interface TournamentSetup {
   date?: string;
   location?: string;
   playerIds: string[];
+  partnerPairs?: [string, string][];
   format: 'singles' | 'doubles';
   tournamentFormat: 'single_elimination' | 'double_elimination' | 'round_robin_playoffs';
   seedingMethod: 'manual' | 'random' | 'skill';

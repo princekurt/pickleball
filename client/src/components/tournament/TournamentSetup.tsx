@@ -5,6 +5,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  PartnerSelection,
+  toPlayerIds,
+  type PartnerPair,
+} from '@/components/shared/PartnerSelection';
+import { MatchupSelection, type Matchup, type MatchupTeam } from '@/components/shared/MatchupSelection';
 import { api } from '@/lib/api';
 import { useToast } from '@/hooks/useToast';
 import type { PlayerWithStats } from '@/types';
@@ -20,6 +26,9 @@ export function TournamentSetup() {
   const [seedingMethod, setSeedingMethod] = useState<'manual' | 'random' | 'skill'>('skill');
   const [bestOf, setBestOf] = useState('1');
   const [loading, setLoading] = useState(false);
+  const [selectingPartners, setSelectingPartners] = useState(false);
+  const [selectingMatchups, setSelectingMatchups] = useState(false);
+  const [pendingPairs, setPendingPairs] = useState<PartnerPair[]>();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -36,10 +45,60 @@ export function TournamentSetup() {
     });
   };
 
-  const handleStart = async () => {
+  const selectedPlayers = players.filter((player) => selectedIds.has(player.id));
+
+  const getBracketSize = (numTeams: number) => Math.pow(2, Math.ceil(Math.log2(numTeams)));
+
+  const generateSeedOrder = (bracketSize: number): number[] => {
+    if (bracketSize === 2) return [0, 1];
+    const half = generateSeedOrder(bracketSize / 2);
+    return half.flatMap((seed) => [seed, bracketSize - 1 - seed]);
+  };
+
+  const orderTeamsForTournament = <T,>(matchups: Matchup<T>[], allTeams: MatchupTeam<T>[]) => {
+    const bracketSize = getBracketSize(allTeams.length);
+    const seedOrder = generateSeedOrder(bracketSize);
+    const slotToSeedIndex = new Map<number, number>();
+    seedOrder.slice(0, allTeams.length).forEach((slot, seedIndex) => {
+      slotToSeedIndex.set(slot, seedIndex);
+    });
+    const playableSlotPairs = Array.from({ length: bracketSize / 2 }, (_, index) => [index * 2, index * 2 + 1] as const)
+      .filter(([slotA, slotB]) => slotToSeedIndex.has(slotA) && slotToSeedIndex.has(slotB));
+    const orderedTeams = new Array<MatchupTeam<T> | undefined>(allTeams.length);
+    const matchedIds = new Set<string>();
+
+    matchups.forEach(([teamA, teamB], index) => {
+      const slotPair = playableSlotPairs[index];
+      if (!slotPair) return;
+      const teamASeedIndex = slotToSeedIndex.get(slotPair[0]);
+      const teamBSeedIndex = slotToSeedIndex.get(slotPair[1]);
+      if (teamASeedIndex === undefined || teamBSeedIndex === undefined) return;
+      if (teamASeedIndex >= 0 && teamASeedIndex < orderedTeams.length) orderedTeams[teamASeedIndex] = teamA;
+      if (teamBSeedIndex >= 0 && teamBSeedIndex < orderedTeams.length) orderedTeams[teamBSeedIndex] = teamB;
+      matchedIds.add(teamA.id);
+      matchedIds.add(teamB.id);
+    });
+
+    const remainingTeams = allTeams.filter((team) => !matchedIds.has(team.id));
+    return orderedTeams.map((team) => team ?? remainingTeams.shift()).filter(Boolean) as MatchupTeam<T>[];
+  };
+
+  const getTournamentMatchupCount = (numTeams: number) => {
+    const bracketSize = getBracketSize(numTeams);
+    const seedOrder = generateSeedOrder(bracketSize);
+    const assignedSlots = new Set(seedOrder.slice(0, numTeams));
+    return Array.from({ length: bracketSize / 2 }, (_, index) => [index * 2, index * 2 + 1] as const)
+      .filter(([slotA, slotB]) => assignedSlots.has(slotA) && assignedSlots.has(slotB)).length;
+  };
+
+  const startTournament = async (manualPairs?: PartnerPair[]) => {
     const minPlayers = format === 'doubles' ? 4 : 2;
     if (selectedIds.size < minPlayers) {
       toast({ title: `Need at least ${minPlayers} players`, variant: 'destructive' });
+      return;
+    }
+    if (format === 'doubles' && manualPairs && selectedIds.size % 2 !== 0) {
+      toast({ title: 'Doubles requires an even number of players', variant: 'destructive' });
       return;
     }
     if (!name.trim()) {
@@ -52,7 +111,8 @@ export function TournamentSetup() {
         name: name.trim(),
         date,
         location: location || undefined,
-        playerIds: [...selectedIds],
+        playerIds: manualPairs ? toPlayerIds(manualPairs) : [...selectedIds],
+        partnerPairs: manualPairs,
         format,
         tournamentFormat,
         seedingMethod,
@@ -66,6 +126,86 @@ export function TournamentSetup() {
       setLoading(false);
     }
   };
+
+  const startWithMatchups = (matchups: Matchup<PartnerPair>[]) => {
+    if (!pendingPairs) return;
+
+    const teams = pendingPairs.map((pair) => ({
+      id: pair.join(':'),
+      name: pair.join(':'),
+      payload: pair,
+    }));
+    const orderedPairs = orderTeamsForTournament(matchups, teams).map((team) => team.payload);
+    void startTournament(orderedPairs);
+  };
+
+  const handleStart = () => {
+    const minPlayers = format === 'doubles' ? 4 : 2;
+    if (selectedIds.size < minPlayers) {
+      toast({ title: `Need at least ${minPlayers} players`, variant: 'destructive' });
+      return;
+    }
+    if (!name.trim()) {
+      toast({ title: 'Enter a tournament name', variant: 'destructive' });
+      return;
+    }
+    if (format === 'doubles') {
+      if (selectedIds.size % 2 !== 0) {
+        toast({ title: 'Doubles requires an even number of players', variant: 'destructive' });
+        return;
+      }
+      setSelectingPartners(true);
+      return;
+    }
+    void startTournament();
+  };
+
+  if (selectingPartners) {
+    return (
+      <PartnerSelection
+        players={selectedPlayers}
+        title="Choose Doubles Partners"
+        description="Pair each selected player with their doubles partner before creating the bracket."
+        confirmLabel="Create Tournament"
+        loading={loading}
+        onBack={() => setSelectingPartners(false)}
+        onConfirm={(pairs) => {
+          setPendingPairs(pairs);
+          setSelectingPartners(false);
+          setSelectingMatchups(true);
+        }}
+      />
+    );
+  }
+
+  if (selectingMatchups && pendingPairs) {
+    const matchupTeams = pendingPairs.map((pair) => {
+      const player1 = players.find((player) => player.id === pair[0]);
+      const player2 = players.find((player) => player.id === pair[1]);
+      return {
+        id: pair.join(':'),
+        name: `${player1?.name ?? 'Player'} & ${player2?.name ?? 'Player'}`,
+        payload: pair,
+      };
+    });
+
+    return (
+      <MatchupSelection
+        teams={matchupTeams}
+        title="Choose Matchups"
+        description="Choose which teams play against each other before creating the bracket."
+        confirmLabel="Create Tournament"
+        matchupLabel="Match"
+        maxMatchups={getTournamentMatchupCount(matchupTeams.length)}
+        loading={loading}
+        onBack={() => {
+          setSelectingMatchups(false);
+          setSelectingPartners(true);
+        }}
+        onConfirm={startWithMatchups}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">

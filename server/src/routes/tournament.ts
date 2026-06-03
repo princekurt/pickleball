@@ -21,7 +21,13 @@ tournamentRouter.post('/setup', async (req, res) => {
       tournamentFormat,
       seedingMethod,
       bestOf,
+      partnerPairs,
     } = req.body;
+
+    const manualTeams =
+      format === 'doubles' && Array.isArray(partnerPairs)
+        ? partnerPairs.map(([player1Id, player2Id]: [string, string]) => ({ player1Id, player2Id }))
+        : undefined;
 
     const players = await prisma.player.findMany({
       where: { id: { in: playerIds } },
@@ -50,7 +56,24 @@ tournamentRouter.post('/setup', async (req, res) => {
 
     // Create teams
     const teams: Array<{ id: string; seed: number }> = [];
-    if (format === 'doubles') {
+    if (format === 'doubles' && manualTeams) {
+      for (let i = 0; i < manualTeams.length; i++) {
+        const pair = manualTeams[i];
+        const team = await prisma.team.create({
+          data: {
+            player1Id: pair.player1Id,
+            player2Id: pair.player2Id,
+          },
+        });
+        teams.push({ id: team.id, seed: i + 1 });
+        await prisma.eventPlayer.createMany({
+          data: [
+            { eventId: event.id, playerId: pair.player1Id, seed: i + 1 },
+            { eventId: event.id, playerId: pair.player2Id, seed: i + 1 },
+          ],
+        });
+      }
+    } else if (format === 'doubles') {
       for (let i = 0; i < players.length - 1; i += 2) {
         const team = await prisma.team.create({
           data: {

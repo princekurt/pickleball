@@ -5,6 +5,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  PartnerSelection,
+  toPlayerIds,
+  type PartnerPair,
+} from '@/components/shared/PartnerSelection';
+import { MatchupSelection, type Matchup, type MatchupTeam } from '@/components/shared/MatchupSelection';
 import { api } from '@/lib/api';
 import { useToast } from '@/hooks/useToast';
 import type { PlayerWithStats } from '@/types';
@@ -20,6 +26,9 @@ export function RoundRobinSetup() {
   const [targetScore, setTargetScore] = useState('11');
   const [gameDuration, setGameDuration] = useState('15');
   const [loading, setLoading] = useState(false);
+  const [selectingPartners, setSelectingPartners] = useState(false);
+  const [selectingMatchups, setSelectingMatchups] = useState(false);
+  const [pendingPairs, setPendingPairs] = useState<PartnerPair[]>();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -38,19 +47,35 @@ export function RoundRobinSetup() {
 
   const selectAll = () => setSelectedIds(new Set(players.map((p) => p.id)));
 
-  const handleStart = async () => {
+  const selectedPlayers = players.filter((player) => selectedIds.has(player.id));
+
+  const orderTeamsForRoundRobin = <T,>(matchups: Matchup<T>[], allTeams: MatchupTeam<T>[]) => {
+    const matchedIds = new Set(matchups.flatMap(([teamA, teamB]) => [teamA.id, teamB.id]));
+    return [
+      ...matchups.map(([teamA]) => teamA),
+      ...allTeams.filter((team) => !matchedIds.has(team.id)),
+      ...matchups.map(([, teamB]) => teamB).reverse(),
+    ];
+  };
+
+  const startEvent = async (manualPairs?: PartnerPair[], orderedPlayerIds?: string[]) => {
     if (selectedIds.size < 4) {
       toast({ title: 'Need at least 4 players', variant: 'destructive' });
+      return;
+    }
+    if (format === 'doubles' && manualPairs && selectedIds.size % 2 !== 0) {
+      toast({ title: 'Doubles requires an even number of players', variant: 'destructive' });
       return;
     }
     setLoading(true);
     try {
       const event = await api.roundRobin.setup({
         name,
-        playerIds: [...selectedIds],
+        playerIds: orderedPlayerIds ?? (manualPairs ? toPlayerIds(manualPairs) : [...selectedIds]),
+        partnerPairs: manualPairs,
         numCourts: parseInt(numCourts),
         format,
-        skillBalanced,
+        skillBalanced: manualPairs ? false : skillBalanced,
         scoringType,
         targetScore: parseInt(targetScore),
         gameDuration: scoringType === 'time' ? parseInt(gameDuration) : undefined,
@@ -63,6 +88,97 @@ export function RoundRobinSetup() {
       setLoading(false);
     }
   };
+
+  const startWithMatchups = (matchups: Matchup<string | PartnerPair>[]) => {
+    if (format === 'doubles' && pendingPairs) {
+      const teams = pendingPairs.map((pair) => ({
+        id: pair.join(':'),
+        name: pair.join(':'),
+        payload: pair,
+      }));
+      const orderedPairs = orderTeamsForRoundRobin(matchups as Matchup<PartnerPair>[], teams).map((team) => team.payload);
+      void startEvent(orderedPairs, toPlayerIds(orderedPairs));
+      return;
+    }
+
+    const teams = selectedPlayers.map((player) => ({
+      id: player.id,
+      name: player.name,
+      payload: player.id,
+    }));
+    const orderedPlayerIds = orderTeamsForRoundRobin(matchups as Matchup<string>[], teams).map((team) => team.payload);
+    void startEvent(undefined, orderedPlayerIds);
+  };
+
+  const handleStart = () => {
+    if (selectedIds.size < 4) {
+      toast({ title: 'Need at least 4 players', variant: 'destructive' });
+      return;
+    }
+    if (format === 'doubles') {
+      if (selectedIds.size % 2 !== 0) {
+        toast({ title: 'Doubles requires an even number of players', variant: 'destructive' });
+        return;
+      }
+      setSelectingPartners(true);
+      return;
+    }
+    setSelectingMatchups(true);
+  };
+
+  if (selectingPartners) {
+    return (
+      <PartnerSelection
+        players={selectedPlayers}
+        title="Choose Doubles Partners"
+        description="Pair each selected player with their doubles partner before starting."
+        confirmLabel="Start Round Robin"
+        loading={loading}
+        onBack={() => setSelectingPartners(false)}
+        onConfirm={(pairs) => {
+          setPendingPairs(pairs);
+          setSelectingPartners(false);
+          setSelectingMatchups(true);
+        }}
+      />
+    );
+  }
+
+  if (selectingMatchups) {
+    const matchupTeams =
+      format === 'doubles' && pendingPairs
+        ? pendingPairs.map((pair) => {
+            const player1 = players.find((player) => player.id === pair[0]);
+            const player2 = players.find((player) => player.id === pair[1]);
+            return {
+              id: pair.join(':'),
+              name: `${player1?.name ?? 'Player'} & ${player2?.name ?? 'Player'}`,
+              payload: pair,
+            };
+          })
+        : selectedPlayers.map((player) => ({
+            id: player.id,
+            name: player.name,
+            payload: player.id,
+          }));
+
+    return (
+      <MatchupSelection
+        teams={matchupTeams}
+        title="Choose Matchups"
+        description="Choose which teams play against each other before starting."
+        confirmLabel="Start Round Robin"
+        matchupLabel="Court"
+        maxMatchups={parseInt(numCourts)}
+        loading={loading}
+        onBack={() => {
+          setSelectingMatchups(false);
+          if (format === 'doubles') setSelectingPartners(true);
+        }}
+        onConfirm={startWithMatchups}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
