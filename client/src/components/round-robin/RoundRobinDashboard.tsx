@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Minus, Plus, Check, Download } from 'lucide-react';
+import { Minus, Plus, Check, Download, ChevronUp, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -101,6 +101,42 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
     }
   };
 
+  const moveUpcomingMatch = async (matchId: string, direction: 'up' | 'down') => {
+    if (!event) return;
+
+    const match = event.matches.find((m) => m.id === matchId);
+    if (!match || !isUpcomingQueuedMatch(match)) return;
+
+    const queueCourtId = getQueueCourtId(match, event.courts);
+    const courtQueue = event.matches
+      .filter((m) => isUpcomingQueuedMatch(m) && getQueueCourtId(m, event.courts) === queueCourtId)
+      .sort(compareQueueOrder);
+    const currentIndex = courtQueue.findIndex((m) => m.id === matchId);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    const target = courtQueue[targetIndex];
+
+    if (!target) return;
+
+    const previousEvent = event;
+    const nextMatches = event.matches.map((m) => {
+      if (m.id === match.id) return { ...m, bracketPosition: target.bracketPosition };
+      if (m.id === target.id) return { ...m, bracketPosition: match.bracketPosition };
+      return m;
+    });
+
+    setEvent({ ...event, matches: nextMatches });
+
+    try {
+      await Promise.all([
+        api.matches.update(match.id, { bracketPosition: target.bracketPosition }),
+        api.matches.update(target.id, { bracketPosition: match.bracketPosition }),
+      ]);
+    } catch {
+      setEvent(previousEvent);
+      toast({ title: 'Error', description: 'Failed to reorder match queue', variant: 'destructive' });
+    }
+  };
+
   if (loading) return <div className="text-center py-12">Loading...</div>;
   if (!event) return <div className="text-center py-12">Event not found</div>;
 
@@ -153,7 +189,7 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
         </Card>
       )}
 
-      <FullSchedule matches={event.matches} />
+      <FullSchedule matches={event.matches} courts={event.courts} onMoveMatch={moveUpcomingMatch} />
 
       <StandingsTable standings={event.standings} />
     </div>
@@ -349,36 +385,150 @@ function StandingsTable({ standings }: { standings: EventDetail['standings'] }) 
   );
 }
 
-function FullSchedule({ matches }: { matches: MatchDetail[] }) {
-  const sorted = [...matches].sort((a, b) => {
-    if (a.round !== b.round) return a.round - b.round;
-    return (a.bracketPosition ?? 0) - (b.bracketPosition ?? 0);
-  });
+function FullSchedule({
+  matches,
+  courts,
+  onMoveMatch,
+}: {
+  matches: MatchDetail[];
+  courts: EventDetail['courts'];
+  onMoveMatch: (matchId: string, direction: 'up' | 'down') => void;
+}) {
+  const upcomingQueues = getUpcomingQueues(matches, courts);
+  const activeRounds = getActiveRoundSections(matches, courts);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Full Schedule</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
-        {sorted.map((match) => (
-          <div key={match.id} className="flex flex-col gap-1 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <span className="font-medium">Round {match.round}</span>
-              <span className="mx-2 text-muted-foreground">-</span>
-              <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
-              <span className="mx-2 text-muted-foreground">vs</span>
-              <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
+      <CardContent className="space-y-4">
+        {activeRounds.length === 0 ? (
+          <p className="text-sm text-muted-foreground">All matches completed.</p>
+        ) : (
+          activeRounds.map((section) => (
+            <div key={section.round} className="space-y-2">
+              <div className="flex items-center justify-between gap-3 border-b pb-2">
+                <h3 className="text-sm font-semibold">Round {section.round}</h3>
+                <span className="text-xs text-muted-foreground">
+                  {section.completed}/{section.total} done
+                </span>
+              </div>
+              <div className="space-y-2">
+                {section.matches.map((match) => {
+                  const queue = upcomingQueues[getQueueCourtId(match, courts)] || [];
+                  const queueIndex = queue.findIndex((m) => m.id === match.id);
+                  const movable = isUpcomingQueuedMatch(match);
+
+                  return (
+                    <div
+                      key={match.id}
+                      className="flex flex-col gap-2 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
+                        <span className="mx-2 text-muted-foreground">vs</span>
+                        <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 sm:justify-end">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>{getMatchCourtName(match, courts)}</span>
+                          <StatusBadge status={match.status} />
+                        </div>
+                        {movable && (
+                          <div className="flex gap-1">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => onMoveMatch(match.id, 'up')}
+                              disabled={queueIndex <= 0}
+                              aria-label="Move match up"
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => onMoveMatch(match.id, 'down')}
+                              disabled={queueIndex === -1 || queueIndex >= queue.length - 1}
+                              aria-label="Move match down"
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{match.court?.name || 'Queued'}</span>
-              <StatusBadge status={match.status} />
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </CardContent>
     </Card>
   );
+}
+
+function getActiveRoundSections(matches: MatchDetail[], courts: EventDetail['courts']) {
+  const rounds = new Map<number, MatchDetail[]>();
+  matches.forEach((match) => {
+    const roundMatches = rounds.get(match.round) || [];
+    roundMatches.push(match);
+    rounds.set(match.round, roundMatches);
+  });
+
+  return [...rounds.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([round, roundMatches]) => {
+      const completed = roundMatches.filter((match) => match.status === 'completed').length;
+      return {
+        round,
+        completed,
+        total: roundMatches.length,
+        matches: roundMatches
+          .filter((match) => match.status !== 'completed')
+          .sort((a, b) => {
+            const courtCompare = getMatchCourtName(a, courts).localeCompare(getMatchCourtName(b, courts));
+            if (courtCompare !== 0) return courtCompare;
+            return compareQueueOrder(a, b);
+          }),
+      };
+    })
+    .filter((section) => section.matches.length > 0);
+}
+
+function getUpcomingQueues(matches: MatchDetail[], courts: EventDetail['courts']) {
+  return matches.filter(isUpcomingQueuedMatch).reduce<Record<string, MatchDetail[]>>((queues, match) => {
+    const courtId = getQueueCourtId(match, courts);
+    queues[courtId] = [...(queues[courtId] || []), match].sort(compareQueueOrder);
+    return queues;
+  }, {});
+}
+
+function isUpcomingQueuedMatch(match: MatchDetail) {
+  return match.status === 'scheduled' && !match.courtId;
+}
+
+function getQueueCourtId(match: MatchDetail, courts: EventDetail['courts']) {
+  if (match.courtId) return match.courtId;
+  if (courts.length === 0) return 'queued';
+
+  const queuePosition = match.bracketPosition ?? 0;
+  return courts[Math.abs(queuePosition) % courts.length]?.id || 'queued';
+}
+
+function getMatchCourtName(match: MatchDetail, courts: EventDetail['courts']) {
+  if (match.court?.name) return match.court.name;
+
+  const courtId = getQueueCourtId(match, courts);
+  return courts.find((court) => court.id === courtId)?.name || 'Queued';
+}
+
+function compareQueueOrder(a: MatchDetail, b: MatchDetail) {
+  return (a.bracketPosition ?? 0) - (b.bracketPosition ?? 0);
 }
 
 function getSittingOutPlayers(event: EventDetail, currentMatches: MatchDetail[]): string[] {
