@@ -32,6 +32,41 @@ export function TournamentDashboard({ eventId }: TournamentDashboardProps) {
 
   useEffect(() => { fetchEvent(); }, [fetchEvent]);
 
+  const handleSubmitScore = async (
+    match: MatchDetail,
+    team1Score: number,
+    team2Score: number,
+    confirm: boolean
+  ) => {
+    const previousEvent = event;
+
+    if (event) {
+      setEvent({
+        ...event,
+        matches: event.matches.map((m) =>
+          m.id === match.id
+            ? {
+                ...m,
+                team1Score,
+                team2Score,
+                status: confirm ? 'completed' : 'in_progress',
+                completedAt: confirm ? new Date().toISOString() : null,
+              }
+            : m
+        ),
+      });
+    }
+
+    try {
+      await api.matches.submitScore(match.id, { team1Score, team2Score, confirm });
+      toast({ title: confirm ? 'Match completed!' : 'Score updated' });
+      fetchEvent();
+    } catch {
+      if (previousEvent) setEvent(previousEvent);
+      toast({ title: 'Error', description: 'Failed to submit score', variant: 'destructive' });
+    }
+  };
+
   if (loading) return <div className="text-center py-12">Loading...</div>;
   if (!event) return <div className="text-center py-12">Tournament not found</div>;
 
@@ -125,7 +160,7 @@ export function TournamentDashboard({ eventId }: TournamentDashboardProps) {
         match={selectedMatch}
         open={!!selectedMatch}
         onOpenChange={(open) => !open && setSelectedMatch(null)}
-        onSubmitted={fetchEvent}
+        onSubmitScore={handleSubmitScore}
       />
     </div>
   );

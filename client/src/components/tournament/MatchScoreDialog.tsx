@@ -3,23 +3,20 @@ import { Minus, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/shared/StatusBadge';
-import { api } from '@/lib/api';
 import { getTeamName } from '@/lib/utils';
-import { useToast } from '@/hooks/useToast';
 import type { MatchDetail } from '@/types';
 
 interface MatchScoreDialogProps {
   match: MatchDetail | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmitted: () => void;
+  onSubmitScore: (match: MatchDetail, team1Score: number, team2Score: number, confirm: boolean) => Promise<void>;
 }
 
-export function MatchScoreDialog({ match, open, onOpenChange, onSubmitted }: MatchScoreDialogProps) {
+export function MatchScoreDialog({ match, open, onOpenChange, onSubmitScore }: MatchScoreDialogProps) {
   const [t1, setT1] = useState(0);
   const [t2, setT2] = useState(0);
   const [saving, setSaving] = useState(false);
-  const { toast } = useToast();
 
   useEffect(() => {
     if (match) {
@@ -33,12 +30,10 @@ export function MatchScoreDialog({ match, open, onOpenChange, onSubmitted }: Mat
   const handleSubmit = async (confirm: boolean) => {
     setSaving(true);
     try {
-      await api.matches.submitScore(match.id, { team1Score: t1, team2Score: t2, confirm });
-      toast({ title: confirm ? 'Match completed!' : 'Score updated' });
       onOpenChange(false);
-      onSubmitted();
+      await onSubmitScore(match, t1, t2, confirm);
     } catch {
-      toast({ title: 'Error', description: 'Failed to submit score', variant: 'destructive' });
+      // Parent owns optimistic rollback and toast handling.
     } finally {
       setSaving(false);
     }

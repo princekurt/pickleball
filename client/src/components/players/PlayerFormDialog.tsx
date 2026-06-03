@@ -4,24 +4,22 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { api } from '@/lib/api';
-import { useToast } from '@/hooks/useToast';
 import { SKILL_LEVELS } from '@/lib/utils';
-import type { PlayerWithStats } from '@/types';
+import type { Player, PlayerWithStats } from '@/types';
 
 interface PlayerFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   player?: PlayerWithStats | null;
+  onSave: (data: Partial<Player>, player?: PlayerWithStats | null) => Promise<void>;
 }
 
-export function PlayerFormDialog({ open, onOpenChange, player }: PlayerFormDialogProps) {
+export function PlayerFormDialog({ open, onOpenChange, player, onSave }: PlayerFormDialogProps) {
   const [name, setName] = useState('');
   const [skillLevel, setSkillLevel] = useState('3.0');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [saving, setSaving] = useState(false);
-  const { toast } = useToast();
 
   useEffect(() => {
     if (player) {
@@ -48,16 +46,10 @@ export function PlayerFormDialog({ open, onOpenChange, player }: PlayerFormDialo
         email: email || null,
         phone: phone || null,
       };
-      if (player) {
-        await api.players.update(player.id, data);
-        toast({ title: 'Player updated' });
-      } else {
-        await api.players.create(data);
-        toast({ title: 'Player added' });
-      }
       onOpenChange(false);
+      await onSave(data, player);
     } catch {
-      toast({ title: 'Error', description: 'Failed to save player', variant: 'destructive' });
+      // Parent owns optimistic rollback and toast handling.
     } finally {
       setSaving(false);
     }

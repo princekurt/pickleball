@@ -3,31 +3,26 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { api } from '@/lib/api';
-import { useToast } from '@/hooks/useToast';
 import type { PlayerWithStats } from '@/types';
 
 interface DeletePlayerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   player: PlayerWithStats | null;
-  onDeleted: () => void;
+  onDelete: (player: PlayerWithStats) => Promise<void>;
 }
 
-export function DeletePlayerDialog({ open, onOpenChange, player, onDeleted }: DeletePlayerDialogProps) {
+export function DeletePlayerDialog({ open, onOpenChange, player, onDelete }: DeletePlayerDialogProps) {
   const [deleting, setDeleting] = useState(false);
-  const { toast } = useToast();
 
   const handleDelete = async () => {
     if (!player) return;
     setDeleting(true);
     try {
-      await api.players.delete(player.id);
-      toast({ title: 'Player deleted' });
       onOpenChange(false);
-      onDeleted();
+      await onDelete(player);
     } catch {
-      toast({ title: 'Error', description: 'Failed to delete player', variant: 'destructive' });
+      // Parent owns optimistic rollback and toast handling.
     } finally {
       setDeleting(false);
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Minus, Plus, Check, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,11 +17,14 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [scores, setScores] = useState<Record<string, { t1: number; t2: number }>>({});
   const [loading, setLoading] = useState(true);
+  const pendingScoreMatchIds = useRef(new Set<string>());
   const { toast } = useToast();
 
   const config: RoundRobinConfig = event?.config ? JSON.parse(event.config) : {};
 
-  const fetchEvent = useCallback(async () => {
+  const fetchEvent = useCallback(async (force = false) => {
+    if (!force && pendingScoreMatchIds.current.size > 0) return;
+
     try {
       const data = await api.events.get(eventId);
       setEvent(data);
@@ -58,6 +61,18 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
 
   const submitScore = async (match: MatchDetail, confirm = false) => {
     const s = scores[match.id] || { t1: match.team1Score, t2: match.team2Score };
+    const previousEvent = event;
+    const previousScores = scores;
+
+    if (event) {
+      pendingScoreMatchIds.current.add(match.id);
+      setEvent(applyOptimisticRoundRobinScore(event, match, s.t1, s.t2, confirm));
+      setScores((prev) => ({
+        ...prev,
+        [match.id]: { t1: s.t1, t2: s.t2 },
+      }));
+    }
+
     try {
       await api.matches.submitScore(match.id, {
         team1Score: s.t1,
@@ -65,8 +80,12 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
         confirm,
       });
       toast({ title: confirm ? 'Score submitted!' : 'Score updated' });
-      fetchEvent();
+      pendingScoreMatchIds.current.delete(match.id);
+      fetchEvent(true);
     } catch {
+      pendingScoreMatchIds.current.delete(match.id);
+      if (previousEvent) setEvent(previousEvent);
+      setScores(previousScores);
       toast({ title: 'Error', description: 'Failed to submit score', variant: 'destructive' });
     }
   };
@@ -128,6 +147,64 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
       <StandingsTable standings={event.standings} />
     </div>
   );
+}
+
+function applyOptimisticRoundRobinScore(
+  event: EventDetail,
+  match: MatchDetail,
+  team1Score: number,
+  team2Score: number,
+  confirm: boolean
+): EventDetail {
+  const status = confirm ? 'completed' : 'in_progress';
+  const nextEvent: EventDetail = {
+    ...event,
+    matches: event.matches.map((m) =>
+      m.id === match.id
+        ? {
+            ...m,
+            team1Score,
+            team2Score,
+            status,
+            completedAt: confirm ? new Date().toISOString() : null,
+          }
+        : m
+    ),
+  };
+
+  if (!confirm || match.status === 'completed' || !match.team1Id || !match.team2Id) {
+    return nextEvent;
+  }
+
+  const team1Won = team1Score > team2Score;
+  const team2Won = team2Score > team1Score;
+
+  return {
+    ...nextEvent,
+    standings: nextEvent.standings.map((standing) => {
+      if (standing.teamId === match.team1Id) {
+        return {
+          ...standing,
+          wins: standing.wins + (team1Won ? 1 : 0),
+          losses: standing.losses + (team1Won ? 0 : 1),
+          pointsFor: standing.pointsFor + team1Score,
+          pointsAgainst: standing.pointsAgainst + team2Score,
+        };
+      }
+
+      if (standing.teamId === match.team2Id) {
+        return {
+          ...standing,
+          wins: standing.wins + (team2Won ? 1 : 0),
+          losses: standing.losses + (team2Won ? 0 : 1),
+          pointsFor: standing.pointsFor + team2Score,
+          pointsAgainst: standing.pointsAgainst + team1Score,
+        };
+      }
+
+      return standing;
+    }),
+  };
 }
 
 function CourtCard({

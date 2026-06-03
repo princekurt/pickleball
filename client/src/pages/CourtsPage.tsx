@@ -36,35 +36,49 @@ export function CourtsPage() {
   };
 
   const handleToggle = async (court: Court) => {
+    const previousCourts = courts;
+    setCourts(courts.map((c) => (c.id === court.id ? { ...c, isActive: !c.isActive } : c)));
+
     try {
       await api.courts.update(court.id, { isActive: !court.isActive });
       fetchCourts();
     } catch {
-      toast({ title: 'Error', variant: 'destructive' });
+      setCourts(previousCourts);
+      toast({ title: 'Error', description: 'Failed to update court', variant: 'destructive' });
     }
   };
 
   const handleSaveEdit = async () => {
     if (!editingId || !editName.trim()) return;
+    const previousCourts = courts;
+    const nextName = editName.trim();
+    setCourts(courts.map((court) => (court.id === editingId ? { ...court, name: nextName } : court)));
+    setEditingId(null);
+
     try {
-      await api.courts.update(editingId, { name: editName.trim() });
-      setEditingId(null);
+      await api.courts.update(editingId, { name: nextName });
       fetchCourts();
       toast({ title: 'Court updated' });
     } catch {
-      toast({ title: 'Error', variant: 'destructive' });
+      setCourts(previousCourts);
+      toast({ title: 'Error', description: 'Failed to update court', variant: 'destructive' });
     }
   };
 
   const handleDelete = async () => {
     if (!deleteId) return;
+    const previousCourts = courts;
+    const id = deleteId;
+    setCourts(courts.filter((court) => court.id !== id));
+    setDeleteId(null);
+
     try {
-      await api.courts.delete(deleteId);
-      setDeleteId(null);
+      await api.courts.delete(id);
       fetchCourts();
       toast({ title: 'Court deleted' });
     } catch {
-      toast({ title: 'Error', variant: 'destructive' });
+      setCourts(previousCourts);
+      toast({ title: 'Error', description: 'Failed to delete court', variant: 'destructive' });
     }
   };
 

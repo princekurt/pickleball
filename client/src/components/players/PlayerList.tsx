@@ -11,7 +11,7 @@ import { api } from '@/lib/api';
 import { usePlayerStore } from '@/store';
 import { useToast } from '@/hooks/useToast';
 import { SKILL_LEVELS } from '@/lib/utils';
-import type { PlayerWithStats } from '@/types';
+import type { Player, PlayerWithStats } from '@/types';
 
 export function PlayerList() {
   const { players, search, skillFilter, setPlayers, setSearch, setSkillFilter, setLoading, loading } = usePlayerStore();
@@ -52,7 +52,76 @@ export function PlayerList() {
   const handleFormClose = () => {
     setFormOpen(false);
     setSelectedPlayer(null);
-    fetchPlayers();
+  };
+
+  const buildOptimisticPlayer = (data: Partial<Player>, id = `optimistic-${Date.now()}`): PlayerWithStats => {
+    const now = new Date().toISOString();
+    return {
+      id,
+      name: data.name || '',
+      skillLevel: data.skillLevel || 3,
+      email: data.email ?? null,
+      phone: data.phone ?? null,
+      avatarUrl: data.avatarUrl ?? null,
+      createdAt: now,
+      updatedAt: now,
+      stats: {
+        gamesPlayed: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+      },
+    };
+  };
+
+  const handleSavePlayer = async (data: Partial<Player>, player?: PlayerWithStats | null) => {
+    const previousPlayers = players;
+
+    if (player) {
+      setPlayers(players.map((p) => (p.id === player.id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p)));
+    } else {
+      const optimisticPlayer = buildOptimisticPlayer(data);
+      setPlayers([optimisticPlayer, ...players]);
+      try {
+        const created = await api.players.create(data);
+        setPlayers([
+          { ...optimisticPlayer, ...created, stats: optimisticPlayer.stats },
+          ...players,
+        ]);
+        toast({ title: 'Player added' });
+        fetchPlayers();
+        return;
+      } catch {
+        setPlayers(previousPlayers);
+        toast({ title: 'Error', description: 'Failed to save player', variant: 'destructive' });
+        return;
+      }
+    }
+
+    try {
+      await api.players.update(player.id, data);
+      toast({ title: 'Player updated' });
+      fetchPlayers();
+    } catch {
+      setPlayers(previousPlayers);
+      toast({ title: 'Error', description: 'Failed to save player', variant: 'destructive' });
+    }
+  };
+
+  const handleDeletePlayer = async (player: PlayerWithStats) => {
+    const previousPlayers = players;
+    setPlayers(players.filter((p) => p.id !== player.id));
+
+    try {
+      await api.players.delete(player.id);
+      toast({ title: 'Player deleted' });
+      fetchPlayers();
+    } catch {
+      setPlayers(previousPlayers);
+      toast({ title: 'Error', description: 'Failed to delete player', variant: 'destructive' });
+    }
   };
 
   return (
@@ -142,8 +211,8 @@ export function PlayerList() {
         </div>
       )}
 
-      <PlayerFormDialog open={formOpen} onOpenChange={handleFormClose} player={selectedPlayer} />
-      <DeletePlayerDialog open={deleteOpen} onOpenChange={setDeleteOpen} player={selectedPlayer} onDeleted={fetchPlayers} />
+      <PlayerFormDialog open={formOpen} onOpenChange={handleFormClose} player={selectedPlayer} onSave={handleSavePlayer} />
+      <DeletePlayerDialog open={deleteOpen} onOpenChange={setDeleteOpen} player={selectedPlayer} onDelete={handleDeletePlayer} />
     </div>
   );
 }
