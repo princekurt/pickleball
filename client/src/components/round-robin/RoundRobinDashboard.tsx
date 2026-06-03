@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Minus, Plus, Check, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,6 +7,7 @@ import { CourtTimer } from './CourtTimer';
 import { api } from '@/lib/api';
 import { getTeamName } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
+import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import type { EventDetail, MatchDetail, RoundRobinConfig } from '@/types';
 
 interface RoundRobinDashboardProps {
@@ -47,6 +48,16 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
     const interval = setInterval(fetchEvent, 10000);
     return () => clearInterval(interval);
   }, [fetchEvent]);
+
+  const eventRealtimeSubscriptions = useMemo(() => [
+    { table: 'Player' as const },
+    { table: 'Match' as const, filter: `eventId=eq.${eventId}` },
+    { table: 'Standing' as const, filter: `eventId=eq.${eventId}` },
+  ], [eventId]);
+
+  const fetchRealtimeEvent = useCallback(() => fetchEvent(true), [fetchEvent]);
+
+  useSupabaseRealtime(`round-robin-${eventId}`, eventRealtimeSubscriptions, fetchRealtimeEvent);
 
   const updateScore = (matchId: string, team: 't1' | 't2', delta: number) => {
     setScores((prev) => {

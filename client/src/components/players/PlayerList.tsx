@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,7 @@ import { DeletePlayerDialog } from './DeletePlayerDialog';
 import { api } from '@/lib/api';
 import { usePlayerStore } from '@/store';
 import { useToast } from '@/hooks/useToast';
+import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import { SKILL_LEVELS } from '@/lib/utils';
 import type { Player, PlayerWithStats } from '@/types';
 
@@ -20,7 +21,7 @@ export function PlayerList() {
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerWithStats | null>(null);
   const { toast } = useToast();
 
-  const fetchPlayers = async () => {
+  const fetchPlayers = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.players.list({
@@ -33,11 +34,15 @@ export function PlayerList() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [search, skillFilter, setLoading, setPlayers, toast]);
+
+  const playerRealtimeSubscriptions = useMemo(() => [{ table: 'Player' as const }], []);
 
   useEffect(() => {
     fetchPlayers();
-  }, [search, skillFilter]);
+  }, [fetchPlayers]);
+
+  useSupabaseRealtime('players-list', playerRealtimeSubscriptions, fetchPlayers);
 
   const handleEdit = (player: PlayerWithStats) => {
     setSelectedPlayer(player);

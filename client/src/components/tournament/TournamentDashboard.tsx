@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Download, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,6 +7,7 @@ import { BracketView } from './BracketView';
 import { MatchScoreDialog } from './MatchScoreDialog';
 import { api } from '@/lib/api';
 import { useToast } from '@/hooks/useToast';
+import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import type { EventDetail, MatchDetail } from '@/types';
 
 interface TournamentDashboardProps {
@@ -31,6 +32,14 @@ export function TournamentDashboard({ eventId }: TournamentDashboardProps) {
   }, [eventId]);
 
   useEffect(() => { fetchEvent(); }, [fetchEvent]);
+
+  const eventRealtimeSubscriptions = useMemo(() => [
+    { table: 'Player' as const },
+    { table: 'Match' as const, filter: `eventId=eq.${eventId}` },
+    { table: 'Standing' as const, filter: `eventId=eq.${eventId}` },
+  ], [eventId]);
+
+  useSupabaseRealtime(`tournament-${eventId}`, eventRealtimeSubscriptions, fetchEvent);
 
   const handleSubmitScore = async (
     match: MatchDetail,
