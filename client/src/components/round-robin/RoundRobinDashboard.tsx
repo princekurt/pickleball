@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Minus, Plus, Check, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { StatusBadge } from '@/components/shared/StatusBadge';
-import { CourtTimer } from './CourtTimer';
 import { api } from '@/lib/api';
 import { getTeamName } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
@@ -18,6 +18,7 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [scores, setScores] = useState<Record<string, { t1: number; t2: number }>>({});
   const [loading, setLoading] = useState(true);
+  const [scoringMatchId, setScoringMatchId] = useState<string | null>(null);
   const pendingScoreMatchIds = useRef(new Set<string>());
   const { toast } = useToast();
 
@@ -59,19 +60,12 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
 
   useSupabaseRealtime(`round-robin-${eventId}`, eventRealtimeSubscriptions, fetchRealtimeEvent);
 
-  const updateScore = (matchId: string, team: 't1' | 't2', delta: number) => {
-    setScores((prev) => {
-      const current = prev[matchId] || { t1: 0, t2: 0 };
-      const key = team;
-      return {
-        ...prev,
-        [matchId]: { ...current, [key]: Math.max(0, current[key] + delta) },
-      };
-    });
-  };
-
-  const submitScore = async (match: MatchDetail, confirm = false) => {
-    const s = scores[match.id] || { t1: match.team1Score, t2: match.team2Score };
+  const submitScore = async (
+    match: MatchDetail,
+    confirm = false,
+    scoreOverride?: { t1: number; t2: number }
+  ) => {
+    const s = scoreOverride || scores[match.id] || { t1: match.team1Score, t2: match.team2Score };
     const previousEvent = event;
     const previousScores = scores;
 
@@ -101,54 +95,19 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
     }
   };
 
-  const moveUpcomingMatch = async (matchId: string, direction: 'up' | 'down') => {
-    if (!event) return;
-
-    const match = event.matches.find((m) => m.id === matchId);
-    if (!match || !isUpcomingQueuedMatch(match)) return;
-
-    const queueCourtId = getQueueCourtId(match, event.courts);
-    const courtQueue = event.matches
-      .filter((m) => isUpcomingQueuedMatch(m) && getQueueCourtId(m, event.courts) === queueCourtId)
-      .sort(compareQueueOrder);
-    const currentIndex = courtQueue.findIndex((m) => m.id === matchId);
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    const target = courtQueue[targetIndex];
-
-    if (!target) return;
-
-    const previousEvent = event;
-    const nextMatches = event.matches.map((m) => {
-      if (m.id === match.id) return { ...m, bracketPosition: target.bracketPosition };
-      if (m.id === target.id) return { ...m, bracketPosition: match.bracketPosition };
-      return m;
-    });
-
-    setEvent({ ...event, matches: nextMatches });
-
-    try {
-      await Promise.all([
-        api.matches.update(match.id, { bracketPosition: target.bracketPosition }),
-        api.matches.update(target.id, { bracketPosition: match.bracketPosition }),
-      ]);
-    } catch {
-      setEvent(previousEvent);
-      toast({ title: 'Error', description: 'Failed to reorder match queue', variant: 'destructive' });
-    }
-  };
-
   if (loading) return <div className="text-center py-12">Loading...</div>;
   if (!event) return <div className="text-center py-12">Event not found</div>;
 
   const activeMatches = event.matches
     .filter((m) => m.status === 'in_progress' && m.courtId)
-    .sort((a, b) => getMatchCourtName(a, event.courts).localeCompare(getMatchCourtName(b, event.courts)));
+    .sort(compareQueueOrder);
   const activeRoundNumbers = [...new Set(activeMatches.map((m) => m.round))].sort((a, b) => a - b);
   const currentRoundLabel =
     activeRoundNumbers.length > 0
       ? `${activeRoundNumbers.length === 1 ? 'Round' : 'Rounds'} ${activeRoundNumbers.join(', ')}`
       : `Round ${config.currentRound || 1}`;
   const sittingOut = getSittingOutPlayers(event, activeMatches);
+  const scoringMatch = scoringMatchId ? event.matches.find((match) => match.id === scoringMatchId) || null : null;
 
   return (
     <div className="space-y-6">
@@ -167,19 +126,6 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {activeMatches.map((match) => (
-          <CourtCard
-            key={match.id}
-            match={match}
-            scores={scores[match.id]}
-            config={config}
-            onScoreChange={(team, delta) => updateScore(match.id, team, delta)}
-            onSubmit={(confirm) => submitScore(match, confirm)}
-          />
-        ))}
-      </div>
-
       {event.status === 'in_progress' && sittingOut.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
@@ -195,7 +141,16 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
         </Card>
       )}
 
-      <FullSchedule matches={event.matches} courts={event.courts} onMoveMatch={moveUpcomingMatch} />
+      <FullSchedule matches={event.matches} onScoreMatch={setScoringMatchId} />
+
+      <RoundRobinScoreDialog
+        match={scoringMatch}
+        open={!!scoringMatch}
+        onOpenChange={(open) => {
+          if (!open) setScoringMatchId(null);
+        }}
+        onSubmitScore={submitScore}
+      />
 
       <StandingsTable standings={event.standings} />
     </div>
@@ -260,67 +215,75 @@ function applyOptimisticRoundRobinScore(
   };
 }
 
-function CourtCard({
+function RoundRobinScoreDialog({
   match,
-  scores,
-  config,
-  onScoreChange,
-  onSubmit,
+  open,
+  onOpenChange,
+  onSubmitScore,
 }: {
-  match: MatchDetail;
-  scores?: { t1: number; t2: number };
-  config: RoundRobinConfig;
-  onScoreChange: (team: 't1' | 't2', delta: number) => void;
-  onSubmit: (confirm: boolean) => void;
+  match: MatchDetail | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmitScore: (match: MatchDetail, confirm: boolean, scores: { t1: number; t2: number }) => Promise<void>;
 }) {
-  const t1 = scores?.t1 ?? match.team1Score;
-  const t2 = scores?.t2 ?? match.team2Score;
-  const isComplete = match.status === 'completed';
+  const [t1, setT1] = useState(0);
+  const [t2, setT2] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (match) {
+      setT1(match.team1Score);
+      setT2(match.team2Score);
+    }
+  }, [match]);
+
+  if (!match) return null;
+
+  const handleSubmit = async (confirm: boolean) => {
+    setSaving(true);
+    try {
+      onOpenChange(false);
+      await onSubmitScore(match, confirm, { t1, t2 });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <Card className={isComplete ? 'opacity-75' : ''}>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base">{match.court?.name || 'Court'}</CardTitle>
-          <StatusBadge status={match.status} />
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Score Match</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-6 py-4">
+          <ScoreRow
+            name={match.team1 ? getTeamName(match.team1) : 'Team 1'}
+            score={t1}
+            onMinus={() => setT1(Math.max(0, t1 - 1))}
+            onPlus={() => setT1(t1 + 1)}
+            disabled={saving}
+          />
+          <div className="text-center text-xs text-muted-foreground font-medium">VS</div>
+          <ScoreRow
+            name={match.team2 ? getTeamName(match.team2) : 'Team 2'}
+            score={t2}
+            onMinus={() => setT2(Math.max(0, t2 - 1))}
+            onPlus={() => setT2(t2 + 1)}
+            disabled={saving}
+          />
         </div>
-        {config.scoringType === 'time' && !isComplete && (
-          <CourtTimer durationMinutes={config.gameDuration || 15} />
-        )}
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <ScoreRow
-          name={match.team1 ? getTeamName(match.team1) : 'TBD'}
-          score={t1}
-          onMinus={() => onScoreChange('t1', -1)}
-          onPlus={() => onScoreChange('t1', 1)}
-          disabled={isComplete}
-          winner={isComplete && t1 > t2}
-        />
-        <div className="text-center text-xs text-muted-foreground font-medium">VS</div>
-        <ScoreRow
-          name={match.team2 ? getTeamName(match.team2) : 'TBD'}
-          score={t2}
-          onMinus={() => onScoreChange('t2', -1)}
-          onPlus={() => onScoreChange('t2', 1)}
-          disabled={isComplete}
-          winner={isComplete && t2 > t1}
-        />
-        {!isComplete && (
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={() => onSubmit(false)}>Update</Button>
-            <Button className="flex-1" onClick={() => onSubmit(true)}>
-              <Check className="h-4 w-4" /> Submit
-            </Button>
-          </div>
-        )}
-        {isComplete && (
-          <p className="text-center text-sm font-medium text-green-600">
-            Final: {t1} - {t2}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => handleSubmit(false)} disabled={saving}>
+            Save Draft
+          </Button>
+          <Button onClick={() => handleSubmit(true)} disabled={saving}>
+            <Check className="h-4 w-4" /> Complete Match
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -393,15 +356,12 @@ function StandingsTable({ standings }: { standings: EventDetail['standings'] }) 
 
 function FullSchedule({
   matches,
-  courts,
-  onMoveMatch,
+  onScoreMatch,
 }: {
   matches: MatchDetail[];
-  courts: EventDetail['courts'];
-  onMoveMatch: (matchId: string, direction: 'up' | 'down') => void;
+  onScoreMatch: (matchId: string) => void;
 }) {
-  const upcomingQueues = getUpcomingQueues(matches, courts);
-  const roundSections = getRoundSections(matches, courts);
+  const roundSections = getRoundSections(matches);
 
   return (
     <Card>
@@ -414,28 +374,17 @@ function FullSchedule({
         ) : (
           roundSections.map((section) => (
             <div key={section.round} className="space-y-2">
-              <div className="flex items-center justify-between gap-3 border-b pb-2">
+              <div className="border-b pb-2">
                 <h3 className="text-sm font-semibold">Round {section.round}</h3>
-                <span className="text-xs text-muted-foreground">
-                  {section.completed}/{section.total} done
-                </span>
               </div>
               <div className="space-y-2">
-                {section.matches.map((match) => {
-                  const queue = upcomingQueues[getQueueCourtId(match, courts)] || [];
-                  const queueIndex = queue.findIndex((m) => m.id === match.id);
-
-                  return (
-                    <ScheduleMatchRow
-                      key={match.id}
-                      match={match}
-                      courts={courts}
-                      queueIndex={queueIndex}
-                      queueLength={queue.length}
-                      onMoveMatch={onMoveMatch}
-                    />
-                  );
-                })}
+                {section.matches.map((match) => (
+                  <ScheduleMatchRow
+                    key={match.id}
+                    match={match}
+                    onScoreMatch={onScoreMatch}
+                  />
+                ))}
               </div>
             </div>
           ))
@@ -447,63 +396,34 @@ function FullSchedule({
 
 function ScheduleMatchRow({
   match,
-  courts,
-  queueIndex,
-  queueLength,
-  onMoveMatch,
+  onScoreMatch,
 }: {
   match: MatchDetail;
-  courts: EventDetail['courts'];
-  queueIndex: number;
-  queueLength: number;
-  onMoveMatch: (matchId: string, direction: 'up' | 'down') => void;
+  onScoreMatch: (matchId: string) => void;
 }) {
-  const movable = isUpcomingQueuedMatch(match);
+  const isComplete = match.status === 'completed';
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
+    <div className="flex flex-col gap-3 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 font-medium">
+        <span className="break-words">{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
         <span className="mx-2 text-muted-foreground">vs</span>
-        <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
+        <span className="break-words">{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
       </div>
-      <div className="flex items-center justify-between gap-2 sm:justify-end">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{getMatchCourtName(match, courts)}</span>
-          <StatusBadge status={match.status} />
-        </div>
-        {movable && (
-          <div className="flex gap-1">
-            {queueIndex > 0 && (
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => onMoveMatch(match.id, 'up')}
-                aria-label="Move match up"
-              >
-                ↑
-              </Button>
-            )}
-            {queueIndex >= 0 && queueIndex < queueLength - 1 && (
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => onMoveMatch(match.id, 'down')}
-                aria-label="Move match down"
-              >
-                ↓
-              </Button>
-            )}
-          </div>
+      <div className="flex items-center justify-end">
+        {isComplete ? (
+          <span className="font-semibold tabular-nums">
+            {match.team1Score} - {match.team2Score}
+          </span>
+        ) : (
+          <Button size="sm" onClick={() => onScoreMatch(match.id)}>Score</Button>
         )}
       </div>
     </div>
   );
 }
 
-function getRoundSections(matches: MatchDetail[], courts: EventDetail['courts']) {
+function getRoundSections(matches: MatchDetail[]) {
   const rounds = new Map<number, MatchDetail[]>();
   matches.forEach((match) => {
     const roundMatches = rounds.get(match.round) || [];
@@ -514,46 +434,11 @@ function getRoundSections(matches: MatchDetail[], courts: EventDetail['courts'])
   return [...rounds.entries()]
     .sort(([a], [b]) => a - b)
     .map(([round, roundMatches]) => {
-      const completed = roundMatches.filter((match) => match.status === 'completed').length;
       return {
         round,
-        completed,
-        total: roundMatches.length,
-        matches: roundMatches
-          .sort((a, b) => {
-            const courtCompare = getMatchCourtName(a, courts).localeCompare(getMatchCourtName(b, courts));
-            if (courtCompare !== 0) return courtCompare;
-            return compareQueueOrder(a, b);
-          }),
+        matches: roundMatches.sort(compareQueueOrder),
       };
     });
-}
-
-function getUpcomingQueues(matches: MatchDetail[], courts: EventDetail['courts']) {
-  return matches.filter(isUpcomingQueuedMatch).reduce<Record<string, MatchDetail[]>>((queues, match) => {
-    const courtId = getQueueCourtId(match, courts);
-    queues[courtId] = [...(queues[courtId] || []), match].sort(compareQueueOrder);
-    return queues;
-  }, {});
-}
-
-function isUpcomingQueuedMatch(match: MatchDetail) {
-  return match.status === 'scheduled';
-}
-
-function getQueueCourtId(match: MatchDetail, courts: EventDetail['courts']) {
-  if (match.courtId) return match.courtId;
-  if (courts.length === 0) return 'queued';
-
-  const queuePosition = match.bracketPosition ?? 0;
-  return courts[Math.abs(queuePosition) % courts.length]?.id || 'queued';
-}
-
-function getMatchCourtName(match: MatchDetail, courts: EventDetail['courts']) {
-  if (match.court?.name) return match.court.name;
-
-  const courtId = getQueueCourtId(match, courts);
-  return courts.find((court) => court.id === courtId)?.name || 'Queued';
 }
 
 function compareQueueOrder(a: MatchDetail, b: MatchDetail) {
