@@ -401,18 +401,18 @@ function FullSchedule({
   onMoveMatch: (matchId: string, direction: 'up' | 'down') => void;
 }) {
   const upcomingQueues = getUpcomingQueues(matches, courts);
-  const activeRounds = getActiveRoundSections(matches, courts);
+  const roundSections = getRoundSections(matches, courts);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Full Schedule</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {activeRounds.length === 0 ? (
-          <p className="text-sm text-muted-foreground">All matches completed.</p>
+      <CardContent className="max-h-[70vh] space-y-4 overflow-y-auto">
+        {roundSections.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No matches scheduled.</p>
         ) : (
-          activeRounds.map((section) => (
+          roundSections.map((section) => (
             <div key={section.round} className="space-y-2">
               <div className="flex items-center justify-between gap-3 border-b pb-2">
                 <h3 className="text-sm font-semibold">Round {section.round}</h3>
@@ -503,13 +503,9 @@ function ScheduleMatchRow({
   );
 }
 
-function getActiveRoundSections(matches: MatchDetail[], courts: EventDetail['courts']) {
-  const activeRounds = new Set(
-    matches.filter((match) => match.status === 'in_progress').map((match) => match.round)
-  );
+function getRoundSections(matches: MatchDetail[], courts: EventDetail['courts']) {
   const rounds = new Map<number, MatchDetail[]>();
   matches.forEach((match) => {
-    if (!activeRounds.has(match.round)) return;
     const roundMatches = rounds.get(match.round) || [];
     roundMatches.push(match);
     rounds.set(match.round, roundMatches);
@@ -524,15 +520,13 @@ function getActiveRoundSections(matches: MatchDetail[], courts: EventDetail['cou
         completed,
         total: roundMatches.length,
         matches: roundMatches
-          .filter((match) => match.status !== 'completed')
           .sort((a, b) => {
             const courtCompare = getMatchCourtName(a, courts).localeCompare(getMatchCourtName(b, courts));
             if (courtCompare !== 0) return courtCompare;
             return compareQueueOrder(a, b);
           }),
       };
-    })
-    .filter((section) => section.matches.length > 0);
+    });
 }
 
 function getUpcomingQueues(matches: MatchDetail[], courts: EventDetail['courts']) {
