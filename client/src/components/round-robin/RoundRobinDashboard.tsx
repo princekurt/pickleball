@@ -140,8 +140,14 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
   if (loading) return <div className="text-center py-12">Loading...</div>;
   if (!event) return <div className="text-center py-12">Event not found</div>;
 
-  const activeMatches = event.matches.filter((m) => m.status !== 'completed' && m.courtId);
-  const currentRound = activeMatches.length > 0 ? Math.min(...activeMatches.map((m) => m.round)) : config.currentRound || 1;
+  const activeMatches = event.matches
+    .filter((m) => m.status === 'in_progress' && m.courtId)
+    .sort((a, b) => getMatchCourtName(a, event.courts).localeCompare(getMatchCourtName(b, event.courts)));
+  const activeRoundNumbers = [...new Set(activeMatches.map((m) => m.round))].sort((a, b) => a - b);
+  const currentRoundLabel =
+    activeRoundNumbers.length > 0
+      ? `${activeRoundNumbers.length === 1 ? 'Round' : 'Rounds'} ${activeRoundNumbers.join(', ')}`
+      : `Round ${config.currentRound || 1}`;
   const sittingOut = getSittingOutPlayers(event, activeMatches);
 
   return (
@@ -151,7 +157,7 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
           <h1 className="text-2xl font-bold">{event.name}</h1>
           <div className="flex items-center gap-2 mt-1">
             <StatusBadge status={event.status} />
-            <span className="text-sm text-muted-foreground">Round {currentRound}</span>
+            <span className="text-sm text-muted-foreground">{currentRoundLabel}</span>
           </div>
         </div>
         <div className="flex gap-2">
@@ -498,8 +504,12 @@ function ScheduleMatchRow({
 }
 
 function getActiveRoundSections(matches: MatchDetail[], courts: EventDetail['courts']) {
+  const activeRounds = new Set(
+    matches.filter((match) => match.status === 'in_progress').map((match) => match.round)
+  );
   const rounds = new Map<number, MatchDetail[]>();
   matches.forEach((match) => {
+    if (!activeRounds.has(match.round)) return;
     const roundMatches = rounds.get(match.round) || [];
     roundMatches.push(match);
     rounds.set(match.round, roundMatches);
@@ -534,7 +544,7 @@ function getUpcomingQueues(matches: MatchDetail[], courts: EventDetail['courts']
 }
 
 function isUpcomingQueuedMatch(match: MatchDetail) {
-  return match.status === 'scheduled' && !match.courtId;
+  return match.status === 'scheduled';
 }
 
 function getQueueCourtId(match: MatchDetail, courts: EventDetail['courts']) {

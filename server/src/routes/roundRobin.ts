@@ -130,33 +130,12 @@ roundRobinRouter.post('/:eventId/next-round', async (req, res) => {
       include: {
         eventPlayers: { include: { player: true } },
         courts: true,
-        matches: { where: { status: { not: 'completed' } } },
       },
     });
 
     if (!event) return res.status(404).json({ error: 'Event not found' });
 
-    const queuedMatches = await prisma.match.findMany({
-      where: { eventId: event.id, status: 'scheduled', courtId: null },
-      orderBy: [{ bracketPosition: 'asc' }],
-      include: {
-        team1: true,
-        team2: true,
-      },
-    });
-    const activeMatches = await prisma.match.findMany({
-      where: { eventId: event.id, status: { in: ['scheduled', 'in_progress'] }, courtId: { not: null } },
-      include: {
-        team1: true,
-        team2: true,
-      },
-    });
-    const openCourts = event.courts.filter((court) => !activeMatches.some((match) => match.courtId === court.id));
-
-    for (const court of openCourts) {
-      await assignNextQueuedMatch(event.id, court.id, queuedMatches, activeMatches);
-    }
-
+    await activateNextRoundRobinMatches(event.id, event.courts);
     await completeEventIfFinished(event.id);
 
     const updated = await prisma.event.findUnique({
@@ -231,41 +210,31 @@ async function upsertTeam(playerIds: string[]) {
 
 async function createQueuedMatches(
   eventId: string,
-  schedule: Array<{ round: number; courts: Array<{ team1: { player1Id: string; player2Id?: string }; team2: { player1Id: string; player2Id?: string } }> }>,
+  schedule: Array<{ round: number; courts: Array<{ courtIndex: number; team1: { player1Id: string; player2Id?: string }; team2: { player1Id: string; player2Id?: string } }> }>,
   courts: Array<{ id: string }>,
   format: string
 ) {
-  const activeMatches: Array<{
-    id: string;
-    courtId: string | null;
-    team1: { player1Id: string; player2Id: string | null } | null;
-    team2: { player1Id: string; player2Id: string | null } | null;
-  }> = [];
-  const queuedMatches: Array<{
-    id: string;
-    courtId: string | null;
-    team1: { player1Id: string; player2Id: string | null } | null;
-    team2: { player1Id: string; player2Id: string | null } | null;
-  }> = [];
-  let queuePosition = 0;
+  const nextCourtPositions = new Map<string, number>();
 
   for (const roundData of schedule) {
     for (const courtAssignment of roundData.courts) {
-      const match = await createQueuedMatch(eventId, roundData.round, queuePosition, courtAssignment, format);
-      queuedMatches.push(match);
-      queuePosition++;
+      const court = courts[courtAssignment.courtIndex % courts.length];
+      if (!court) continue;
+
+      const courtPosition = nextCourtPositions.get(court.id) || 0;
+      await createQueuedMatch(eventId, roundData.round, courtPosition, court.id, courtAssignment, format);
+      nextCourtPositions.set(court.id, courtPosition + 1);
     }
   }
 
-  for (const court of courts) {
-    await assignNextQueuedMatch(eventId, court.id, queuedMatches, activeMatches);
-  }
+  await activateNextRoundRobinMatches(eventId, courts);
 }
 
 async function createQueuedMatch(
   eventId: string,
   round: number,
   queuePosition: number,
+  courtId: string,
   courtAssignment: { team1: { player1Id: string; player2Id?: string }; team2: { player1Id: string; player2Id?: string } },
   format: string
 ) {
@@ -285,6 +254,7 @@ async function createQueuedMatch(
         eventId,
         team1Id: team1.id,
         team2Id: team2.id,
+        courtId,
         round,
         status: 'scheduled',
         bracketPosition: queuePosition,
@@ -307,49 +277,28 @@ async function createQueuedMatch(
   return match;
 }
 
-async function assignNextQueuedMatch(
+async function activateNextRoundRobinMatches(
   eventId: string,
-  courtId: string,
-  queuedMatches: Array<{
-    id: string;
-    courtId: string | null;
-    team1: { player1Id: string; player2Id: string | null } | null;
-    team2: { player1Id: string; player2Id: string | null } | null;
-  }>,
-  activeMatches: Array<{
-    id: string;
-    courtId: string | null;
-    team1: { player1Id: string; player2Id: string | null } | null;
-    team2: { player1Id: string; player2Id: string | null } | null;
-  }>
+  courts: Array<{ id: string }>
 ) {
-  const activePlayerIds = new Set(activeMatches.flatMap(getMatchPlayerIds));
-  const nextIndex = queuedMatches.findIndex((match) =>
-    match.courtId === null && getMatchPlayerIds(match).every((playerId) => !activePlayerIds.has(playerId))
-  );
+  for (const court of courts) {
+    const activeMatch = await prisma.match.findFirst({
+      where: { eventId, courtId: court.id, status: 'in_progress' },
+    });
+    if (activeMatch) continue;
 
-  if (nextIndex === -1) return null;
+    const nextMatch = await prisma.match.findFirst({
+      where: { eventId, courtId: court.id, status: 'scheduled' },
+      orderBy: [{ round: 'asc' }, { bracketPosition: 'asc' }],
+    });
 
-  const [nextMatch] = queuedMatches.splice(nextIndex, 1);
-  const assigned = await prisma.match.update({
-    where: { id: nextMatch.id, eventId },
-    data: { courtId },
-    include: {
-      team1: true,
-      team2: true,
-    },
-  });
-  activeMatches.push(assigned);
-  return assigned;
-}
-
-function getMatchPlayerIds(match: {
-  team1: { player1Id: string; player2Id: string | null } | null;
-  team2: { player1Id: string; player2Id: string | null } | null;
-}) {
-  return [match.team1?.player1Id, match.team1?.player2Id, match.team2?.player1Id, match.team2?.player2Id].filter(
-    Boolean
-  ) as string[];
+    if (nextMatch) {
+      await prisma.match.update({
+        where: { id: nextMatch.id },
+        data: { status: 'in_progress' },
+      });
+    }
+  }
 }
 
 async function completeEventIfFinished(eventId: string) {

@@ -23,7 +23,7 @@ matchesRouter.get('/:id', async (req, res) => {
 
 matchesRouter.put('/:id', async (req, res) => {
   try {
-    const { team1Score, team2Score, status, courtId, scheduledTime } = req.body;
+    const { team1Score, team2Score, status, courtId, scheduledTime, bracketPosition } = req.body;
     const match = await prisma.match.update({
       where: { id: req.params.id },
       data: {
@@ -31,6 +31,7 @@ matchesRouter.put('/:id', async (req, res) => {
         team2Score,
         status,
         courtId,
+        bracketPosition,
         scheduledTime: scheduledTime ? new Date(scheduledTime) : undefined,
       },
       include: {
@@ -91,51 +92,25 @@ async function fillOpenRoundRobinCourts(eventId: string) {
     where: { eventId },
     orderBy: { name: 'asc' },
   });
-  const queuedMatches = await prisma.match.findMany({
-    where: { eventId, status: 'scheduled', courtId: null },
-    orderBy: [{ bracketPosition: 'asc' }],
-    include: {
-      team1: true,
-      team2: true,
-    },
-  });
-  const activeMatches = await prisma.match.findMany({
-    where: { eventId, status: { in: ['scheduled', 'in_progress'] }, courtId: { not: null } },
-    include: {
-      team1: true,
-      team2: true,
-    },
-  });
-  const openCourts = courts.filter((court) => !activeMatches.some((match) => match.courtId === court.id));
 
-  for (const court of openCourts) {
-    const activePlayerIds = new Set(activeMatches.flatMap(getMatchPlayerIds));
-    const nextIndex = queuedMatches.findIndex((candidate) =>
-      getMatchPlayerIds(candidate).every((playerId) => !activePlayerIds.has(playerId))
-    );
-
-    if (nextIndex === -1) return;
-
-    const [nextMatch] = queuedMatches.splice(nextIndex, 1);
-    const assigned = await prisma.match.update({
-      where: { id: nextMatch.id },
-      data: { courtId: court.id },
-      include: {
-        team1: true,
-        team2: true,
-      },
+  for (const court of courts) {
+    const activeMatch = await prisma.match.findFirst({
+      where: { eventId, courtId: court.id, status: 'in_progress' },
     });
-    activeMatches.push(assigned);
-  }
-}
+    if (activeMatch) continue;
 
-function getMatchPlayerIds(match: {
-  team1: { player1Id: string; player2Id: string | null } | null;
-  team2: { player1Id: string; player2Id: string | null } | null;
-}) {
-  return [match.team1?.player1Id, match.team1?.player2Id, match.team2?.player1Id, match.team2?.player2Id].filter(
-    Boolean
-  ) as string[];
+    const nextMatch = await prisma.match.findFirst({
+      where: { eventId, courtId: court.id, status: 'scheduled' },
+      orderBy: [{ round: 'asc' }, { bracketPosition: 'asc' }],
+    });
+
+    if (nextMatch) {
+      await prisma.match.update({
+        where: { id: nextMatch.id },
+        data: { status: 'in_progress' },
+      });
+    }
+  }
 }
 
 async function completeRoundRobinIfFinished(eventId: string) {
