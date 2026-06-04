@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Minus, Plus, Check, Download, ChevronUp, ChevronDown } from 'lucide-react';
+import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { Minus, Plus, Check, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -101,36 +103,41 @@ export function RoundRobinDashboard({ eventId }: RoundRobinDashboardProps) {
     }
   };
 
-  const moveUpcomingMatch = async (matchId: string, direction: 'up' | 'down') => {
+  const moveUpcomingMatch = async (activeId: string, overId: string) => {
     if (!event) return;
 
-    const match = event.matches.find((m) => m.id === matchId);
-    if (!match || !isUpcomingQueuedMatch(match)) return;
+    const match = event.matches.find((m) => m.id === activeId);
+    const target = event.matches.find((m) => m.id === overId);
+    if (!match || !target || !isUpcomingQueuedMatch(match) || !isUpcomingQueuedMatch(target)) return;
 
     const queueCourtId = getQueueCourtId(match, event.courts);
+    if (getQueueCourtId(target, event.courts) !== queueCourtId) return;
+
     const courtQueue = event.matches
       .filter((m) => isUpcomingQueuedMatch(m) && getQueueCourtId(m, event.courts) === queueCourtId)
       .sort(compareQueueOrder);
-    const currentIndex = courtQueue.findIndex((m) => m.id === matchId);
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    const target = courtQueue[targetIndex];
+    const currentIndex = courtQueue.findIndex((m) => m.id === activeId);
+    const targetIndex = courtQueue.findIndex((m) => m.id === overId);
+    if (currentIndex === -1 || targetIndex === -1 || currentIndex === targetIndex) return;
 
-    if (!target) return;
+    const nextQueue = [...courtQueue];
+    const [movedMatch] = nextQueue.splice(currentIndex, 1);
+    nextQueue.splice(targetIndex, 0, movedMatch);
+    const queuePositions = courtQueue.map((m) => m.bracketPosition);
+    const nextPositions = new Map(nextQueue.map((m, index) => [m.id, queuePositions[index]]));
+    const changedMatches = nextQueue.filter((m) => m.bracketPosition !== nextPositions.get(m.id));
 
     const previousEvent = event;
-    const nextMatches = event.matches.map((m) => {
-      if (m.id === match.id) return { ...m, bracketPosition: target.bracketPosition };
-      if (m.id === target.id) return { ...m, bracketPosition: match.bracketPosition };
-      return m;
-    });
+    const nextMatches = event.matches.map((m) =>
+      nextPositions.has(m.id) ? { ...m, bracketPosition: nextPositions.get(m.id) } : m
+    );
 
     setEvent({ ...event, matches: nextMatches });
 
     try {
-      await Promise.all([
-        api.matches.update(match.id, { bracketPosition: target.bracketPosition }),
-        api.matches.update(target.id, { bracketPosition: match.bracketPosition }),
-      ]);
+      await Promise.all(
+        changedMatches.map((m) => api.matches.update(m.id, { bracketPosition: nextPositions.get(m.id) }))
+      );
     } catch {
       setEvent(previousEvent);
       toast({ title: 'Error', description: 'Failed to reorder match queue', variant: 'destructive' });
@@ -392,83 +399,90 @@ function FullSchedule({
 }: {
   matches: MatchDetail[];
   courts: EventDetail['courts'];
-  onMoveMatch: (matchId: string, direction: 'up' | 'down') => void;
+  onMoveMatch: (activeId: string, overId: string) => void;
 }) {
   const upcomingQueues = getUpcomingQueues(matches, courts);
   const activeRounds = getActiveRoundSections(matches, courts);
+  const sortableItems = Object.values(upcomingQueues).flatMap((queue) => queue.map((match) => match.id));
+  const handleDragEnd = (event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (overId) onMoveMatch(activeId, overId);
+  };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Full Schedule</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {activeRounds.length === 0 ? (
-          <p className="text-sm text-muted-foreground">All matches completed.</p>
-        ) : (
-          activeRounds.map((section) => (
-            <div key={section.round} className="space-y-2">
-              <div className="flex items-center justify-between gap-3 border-b pb-2">
-                <h3 className="text-sm font-semibold">Round {section.round}</h3>
-                <span className="text-xs text-muted-foreground">
-                  {section.completed}/{section.total} done
-                </span>
-              </div>
-              <div className="space-y-2">
-                {section.matches.map((match) => {
-                  const queue = upcomingQueues[getQueueCourtId(match, courts)] || [];
-                  const queueIndex = queue.findIndex((m) => m.id === match.id);
-                  const movable = isUpcomingQueuedMatch(match);
-
-                  return (
-                    <div
-                      key={match.id}
-                      className="flex flex-col gap-2 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div>
-                        <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
-                        <span className="mx-2 text-muted-foreground">vs</span>
-                        <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2 sm:justify-end">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{getMatchCourtName(match, courts)}</span>
-                          <StatusBadge status={match.status} />
-                        </div>
-                        {movable && (
-                          <div className="flex gap-1">
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => onMoveMatch(match.id, 'up')}
-                              disabled={queueIndex <= 0}
-                              aria-label="Move match up"
-                            >
-                              <ChevronUp className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => onMoveMatch(match.id, 'down')}
-                              disabled={queueIndex === -1 || queueIndex >= queue.length - 1}
-                              aria-label="Move match down"
-                            >
-                              <ChevronDown className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
+      <CardContent>
+        <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
+            <div className="space-y-4">
+              {activeRounds.length === 0 ? (
+                <p className="text-sm text-muted-foreground">All matches completed.</p>
+              ) : (
+                activeRounds.map((section) => (
+                  <div key={section.round} className="space-y-2">
+                    <div className="flex items-center justify-between gap-3 border-b pb-2">
+                      <h3 className="text-sm font-semibold">Round {section.round}</h3>
+                      <span className="text-xs text-muted-foreground">
+                        {section.completed}/{section.total} done
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="space-y-2">
+                      {section.matches.map((match) => (
+                        <ScheduleMatchRow key={match.id} match={match} courts={courts} />
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-          ))
-        )}
+          </SortableContext>
+        </DndContext>
       </CardContent>
     </Card>
+  );
+}
+
+function ScheduleMatchRow({ match, courts }: { match: MatchDetail; courts: EventDetail['courts'] }) {
+  const draggable = isUpcomingQueuedMatch(match);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: match.id, disabled: !draggable });
+  const style = {
+    transform: transform
+      ? `translate3d(${transform.x}px, ${transform.y}px, 0) scaleX(${transform.scaleX}) scaleY(${transform.scaleY})`
+      : undefined,
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex flex-col gap-2 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between ${
+        draggable ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${isDragging ? 'border-primary bg-muted opacity-80 shadow-sm' : ''}`}
+      {...attributes}
+      {...listeners}
+    >
+      <div>
+        <span>{match.team1 ? getTeamName(match.team1) : 'TBD'}</span>
+        <span className="mx-2 text-muted-foreground">vs</span>
+        <span>{match.team2 ? getTeamName(match.team2) : 'TBD'}</span>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>{getMatchCourtName(match, courts)}</span>
+        <StatusBadge status={match.status} />
+      </div>
+    </div>
   );
 }
 
